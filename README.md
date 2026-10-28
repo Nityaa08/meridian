@@ -190,7 +190,7 @@ curl http://localhost:8000/health
 
 These were found by re-running the project with a fresh install. They are not fixed yet.
 
-- **macOS crash on the first research request.** The Extractor runs two `SentenceTransformer.encode` calls at the same time in two threads. With the library versions installed on 2026-10-28 (torch 2.14.1, sentence-transformers 6.2.0), this segfaults the server process (exit code 139). Embedding the query and passages in one call avoids it. `requirements.txt` is unpinned, so installs differ over time.
+- **Crash on Apple Silicon Macs on the first research request.** The Extractor runs two `SentenceTransformer.encode` calls at the same time in two threads. On an Apple Silicon Mac the library uses the Mac GPU backend (MPS) by default, and the parallel calls segfault the server (exit code 139, 3 of 3 runs on 2026-10-28; torch 2.14.1, sentence-transformers 6.2.0). The same code on the CPU (`device="cpu"`) passed 4 of 4 runs. Workarounds: load the model on the CPU, or embed the query and passages in one call. Not fixed yet.
 - **Wikipedia returns no results.** The code calls `https://en.wikipedia.org/api/rest_v1/page/search/title`, which returns HTTP 404. Wikipedia's title search is at `/w/rest.php/v1/search/title`.
 - **DuckDuckGo search errors.** `duckduckgo-search==6.2.6` fails with `BuilderError Invalid impersonate: "chrome_119"` against its current dependencies.
 - **Only arXiv returns passages today**, so non-technical questions may get no sources.
