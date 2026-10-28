@@ -1,14 +1,12 @@
 # Meridian — Multi-Agent Research Intelligence API
 
-> 5 specialized AI agents that decompose your question, search the web in parallel, rank evidence semantically, detect contradictions, and stream a structured report — live.
+> A five-stage research pipeline: an LLM splits your question into sub-questions, the sub-questions are searched concurrently, local embeddings rank the passages, an LLM reviews them for gaps and contradictions, and an LLM writes a structured report — with every stage streamed live over Server-Sent Events.
 
 ---
 
 ## The Problem
 
-AI research tools are shallow. A basic RAG system fires one query at a vector database and returns a chunk. It doesn't understand what you're *really* asking, doesn't verify its sources, and can't tell you what it doesn't know.
-
-Meridian does better.
+A basic retrieval system fires one query and returns one chunk. Meridian tries a broader approach: it splits the question, searches each part, ranks the evidence, asks an LLM to note gaps and contradictions, and shows each step as it happens. It has not been evaluated for answer quality yet.
 
 ---
 
@@ -50,16 +48,19 @@ Each step streams live to `GET /research/{id}/stream` as Server-Sent Events.
 ## Quick Start
 
 ```bash
-git clone https://github.com/Nityaa08/Coding-Challenge-Yuno.git
-cd Coding-Challenge-Yuno
+git clone https://github.com/Nityaa08/meridian.git
+cd meridian
 pip install -r requirements.txt
 
 # Get a free Groq API key at https://console.groq.com
 cp .env.example .env
 # edit .env and set GROQ_API_KEY=your_key_here
+# and set GROQ_MODEL to a current Groq model (the default was retired; see Known Issues)
 
 uvicorn main:app --reload
 ```
+
+Before you run it, read [Known Issues](#known-issues-checked-2026-10-28): on macOS the server can crash on the first request.
 
 ---
 
@@ -79,6 +80,7 @@ curl -N http://localhost:8000/research/abc-123/stream
 # → data: {"agent":"ExtractorAgent","type":"EXTRACTING","message":"Selected top 10 passages",...}
 # → data: {"agent":"CriticAgent","type":"CRITIQUING","message":"Found 1 contradictions, 2 gaps",...}
 # → data: {"agent":"SynthesizerAgent","type":"SYNTHESIZING","message":"Report complete. Confidence: 0.84",...}
+#   ("Confidence" in this message is the retrieval similarity described below)
 # → data: {"agent":"Orchestrator","type":"DONE",...}
 
 # 3. Get the full report
@@ -112,6 +114,8 @@ curl http://localhost:8000/health
 ---
 
 ## Final Report Structure
+
+`confidence_score` is the retrieval similarity: the mean cosine similarity of the passages used. It is not a measure of correctness.
 
 ```json
 {
@@ -147,10 +151,10 @@ curl http://localhost:8000/health
 | Agent | Role |
 |-------|------|
 | **PlannerAgent** | Uses Groq LLM to decompose the query into 3-5 focused sub-questions, ensuring full coverage of the topic. |
-| **ResearcherAgent** | Searches Wikipedia REST API, arXiv API, and DuckDuckGo in parallel per sub-question, collecting raw passages. |
-| **ExtractorAgent** | Uses `sentence-transformers` to embed query + passages and rank them by cosine similarity — no keywords, pure semantics. |
-| **CriticAgent** | Uses Groq LLM to detect contradictions between sources, identify knowledge gaps, and flag potentially unreliable sources. |
-| **SynthesizerAgent** | Uses Groq LLM to build a structured report with summary, key findings, and cited sections. Confidence score = mean cosine similarity of used passages. |
+| **ResearcherAgent** | Runs once per sub-question, all sub-questions concurrently. Each run searches Wikipedia, then arXiv, then DuckDuckGo only if fewer than 3 passages were found. Plain code, no LLM. |
+| **ExtractorAgent** | Uses `sentence-transformers` to embed query + passages and rank them by cosine similarity; keeps passages with similarity at least 0.15, up to 10. Plain code, no LLM. |
+| **CriticAgent** | Asks the Groq LLM to list contradictions, knowledge gaps and potentially unreliable sources in up to 8 passages. Its accuracy has not been evaluated. |
+| **SynthesizerAgent** | Uses Groq LLM to build a structured report with summary, key findings, and cited sections. Retrieval similarity (the `confidence_score` field) = mean cosine similarity of the passages used. It measures how close the passages are to the question, not whether the report is correct. |
 
 ---
 
@@ -159,7 +163,7 @@ curl http://localhost:8000/health
 | Component | Tool | Why Free |
 |-----------|------|----------|
 | API framework | FastAPI + asyncio | Open source |
-| LLM | Groq `llama-3.1-8b-instant` | Free tier, no credit card |
+| LLM | Groq, OpenAI-compatible API (default `llama-3.1-8b-instant`, retired 16 Aug 2026 — set `GROQ_MODEL`) | Free tier, no credit card |
 | Embeddings | sentence-transformers `all-MiniLM-L6-v2` | Local, open source, 90MB |
 | Search | Wikipedia REST API + arXiv API | Official, no key needed |
 | Search fallback | duckduckgo-search | Free scraper library |
@@ -176,6 +180,26 @@ curl http://localhost:8000/health
 
 **Why multi-source search?** Wikipedia for factual overviews, arXiv for cutting-edge research/technical topics, DuckDuckGo as a fallback for recent or niche topics. No single source covers everything.
 
-**Why asyncio.gather with return_exceptions=True?** One failing API call (DuckDuckGo rate limit, arXiv timeout) must not kill the entire pipeline. Graceful degradation is a production requirement.
+**Why asyncio.gather with return_exceptions=True?** One failing API call (DuckDuckGo rate limit, arXiv timeout) must not kill the entire pipeline. Today the fallbacks are silent: the final status does not show which stages failed (see Known Issues).
 
 **Why sentence-transformers in asyncio.to_thread?** `encode()` is synchronous and CPU-bound. Running it directly in an async function blocks the entire event loop. `to_thread()` offloads it to a thread pool.
+
+---
+
+## Known Issues (checked 2026-10-28)
+
+These were found by re-running the project with a fresh install. They are not fixed yet.
+
+- **macOS crash on the first research request.** The Extractor runs two `SentenceTransformer.encode` calls at the same time in two threads. With the library versions installed on 2026-10-28 (torch 2.14.1, sentence-transformers 6.2.0), this segfaults the server process (exit code 139). Embedding the query and passages in one call avoids it. `requirements.txt` is unpinned, so installs differ over time.
+- **Wikipedia returns no results.** The code calls `https://en.wikipedia.org/api/rest_v1/page/search/title`, which returns HTTP 404. Wikipedia's title search is at `/w/rest.php/v1/search/title`.
+- **DuckDuckGo search errors.** `duckduckgo-search==6.2.6` fails with `BuilderError Invalid impersonate: "chrome_119"` against its current dependencies.
+- **Only arXiv returns passages today**, so non-technical questions may get no sources.
+- **Default model retired.** Groq shut down `llama-3.1-8b-instant` for free and developer tiers on 16 August 2026. Set `GROQ_MODEL` in `.env` to a current model, for example `openai/gpt-oss-20b` (Groq's suggested replacement).
+- **Fallbacks are silent.** If every LLM call fails, the session still ends with `status: completed` and a `confidence_score`. Only the stream shows the fallback messages.
+- **Citations are not checked.** URLs the Synthesizer puts in `sections[].sources` are not validated against the retrieved sources.
+- **Event log and queues.** Only the final `DONE` event is saved in `agent_events`. Event queues are not removed after a session ends, so `active_sessions` in `/health` keeps growing and re-opening a finished stream waits with no data.
+- **No authentication or rate limit.** `/sessions` lists every user's queries.
+
+## Tests
+
+There are no automated tests yet.
