@@ -198,6 +198,7 @@ These were found by re-running the project with a fresh install. They are not fi
 - **Fallbacks are silent.** If every LLM call fails, the session still ends with `status: completed` and a `confidence_score`. Only the stream shows the fallback messages.
 - **Citations are not checked.** URLs the Synthesizer puts in `sections[].sources` are not validated against the retrieved sources.
 - **Event log and queues.** Only the final `DONE` event is saved in `agent_events`. Event queues are not removed after a session ends, so `active_sessions` in `/health` keeps growing and re-opening a finished stream waits with no data.
+- **Not deployable on Vercel serverless.** `sentence-transformers` pulls in PyTorch, so the install bundle is about 5.6 GB, above Vercel's 500 MB function limit. Run it locally or in a container on a VM instead.
 - **No authentication or rate limit.** `/sessions` lists every user's queries.
 
 ## Tests
