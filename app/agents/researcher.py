@@ -1,7 +1,12 @@
 import asyncio
 import httpx
+from urllib.parse import quote
 from xml.etree import ElementTree
 from app.agents.base import BaseAgent
+
+WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
+# Wikimedia asks API clients for a descriptive User-Agent with contact info.
+USER_AGENT = "Meridian/1.0 (https://github.com/Nityaa08/meridian)"
 
 
 class ResearcherAgent(BaseAgent):
@@ -30,38 +35,30 @@ class ResearcherAgent(BaseAgent):
         return passages
 
     async def _search_wikipedia(self, query: str) -> list[dict]:
+        """
+        Full-text search plus intro extracts in one MediaWiki Action API call.
+        (The old REST path /api/rest_v1/page/search/title returned HTTP 404.)
+        """
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                search_resp = await client.get(
-                    "https://en.wikipedia.org/api/rest_v1/page/search/title",
-                    params={"q": query, "limit": 3},
-                    headers={"User-Agent": "Meridian/1.0 (research bot)"},
+                resp = await client.get(
+                    WIKIPEDIA_API,
+                    params={
+                        "action": "query",
+                        "format": "json",
+                        "formatversion": "2",
+                        "generator": "search",
+                        "gsrsearch": query,
+                        "gsrlimit": 2,
+                        "prop": "extracts|info",
+                        "exintro": 1,
+                        "explaintext": 1,
+                        "inprop": "url",
+                    },
+                    headers={"User-Agent": USER_AGENT},
                 )
-                search_resp.raise_for_status()
-                results = search_resp.json().get("pages", [])
-
-                passages = []
-                for page in results[:2]:
-                    title = page.get("title", "")
-                    key = page.get("key", title.replace(" ", "_"))
-                    try:
-                        summary_resp = await client.get(
-                            f"https://en.wikipedia.org/api/rest_v1/page/summary/{key}",
-                            headers={"User-Agent": "Meridian/1.0 (research bot)"},
-                        )
-                        summary_resp.raise_for_status()
-                        data = summary_resp.json()
-                        extract = data.get("extract", "")
-                        if extract:
-                            passages.append({
-                                "title": title,
-                                "url": data.get("content_urls", {}).get("desktop", {}).get("page", ""),
-                                "text": extract,
-                                "source": "wikipedia",
-                            })
-                    except Exception:
-                        continue
-                return passages
+                resp.raise_for_status()
+                return parse_wikipedia_response(resp.json())
         except Exception:
             return []
 
@@ -102,24 +99,40 @@ class ResearcherAgent(BaseAgent):
 
     async def _search_duckduckgo(self, query: str) -> list[dict]:
         try:
-            from duckduckgo_search import DDGS
-            results = await asyncio.to_thread(self._ddg_sync, query)
-            return results
+            return await asyncio.to_thread(self._ddg_sync, query)
         except Exception:
             return []
 
     def _ddg_sync(self, query: str) -> list[dict]:
+        # "ddgs" is the maintained successor of the duckduckgo-search package,
+        # whose 6.x release failed with "Invalid impersonate".
         try:
-            from duckduckgo_search import DDGS
-            passages = []
-            with DDGS() as ddgs:
-                for r in ddgs.text(query, max_results=3):
-                    passages.append({
-                        "title": r.get("title", ""),
-                        "url": r.get("href", ""),
-                        "text": r.get("body", ""),
-                        "source": "duckduckgo",
-                    })
-            return passages
+            from ddgs import DDGS
+            results = DDGS().text(query, max_results=3) or []
+            return [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", ""),
+                    "text": r.get("body", ""),
+                    "source": "duckduckgo",
+                }
+                for r in results
+                if r.get("body")
+            ]
         except Exception:
             return []
+
+
+def parse_wikipedia_response(data: dict) -> list[dict]:
+    """Turn an Action API generator=search response into passages, in search-rank order."""
+    pages = data.get("query", {}).get("pages", [])
+    pages = sorted(pages, key=lambda p: p.get("index", 0))
+    passages = []
+    for page in pages:
+        extract = (page.get("extract") or "").strip()
+        if not extract:
+            continue
+        title = page.get("title", "")
+        url = page.get("fullurl") or "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_"))
+        passages.append({"title": title, "url": url, "text": extract, "source": "wikipedia"})
+    return passages

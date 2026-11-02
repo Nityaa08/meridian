@@ -55,12 +55,12 @@ pip install -r requirements.txt
 # Get a free Groq API key at https://console.groq.com
 cp .env.example .env
 # edit .env and set GROQ_API_KEY=your_key_here
-# and set GROQ_MODEL to a current Groq model (the default was retired; see Known Issues)
+# GROQ_MODEL defaults to openai/gpt-oss-20b (a Groq production model on 2026-11-02)
 
 uvicorn main:app --reload
 ```
 
-Before you run it, read [Known Issues](#known-issues-checked-2026-10-28): on macOS the server can crash on the first request.
+The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Issues](#known-issues-checked-2026-11-02).
 
 ---
 
@@ -93,7 +93,7 @@ curl -X POST http://localhost:8000/research/abc-123/followup \
 
 # 5. Health check
 curl http://localhost:8000/health
-# → {"status":"ok","embedder":"loaded","db":"ok","model":"llama-3.1-8b-instant"}
+# → {"status":"ok","embedder":"loaded","db":"ok","model":"openai/gpt-oss-20b","active_sessions":0}
 ```
 
 ---
@@ -103,7 +103,7 @@ curl http://localhost:8000/health
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/research` | Start a new research session |
-| `GET` | `/research/{id}/stream` | SSE stream of live agent events |
+| `GET` | `/research/{id}/stream` | SSE stream of live agent events (replays the saved events once the session has finished) |
 | `GET` | `/research/{id}` | Get status + final report |
 | `POST` | `/research/{id}/followup` | Ask follow-up (reuses fetched sources) |
 | `GET` | `/sessions` | List all sessions |
@@ -117,12 +117,15 @@ curl http://localhost:8000/health
 
 `confidence_score` is the retrieval similarity: the mean cosine similarity of the passages used. It is not a measure of correctness.
 
+`status` is `completed` when every stage worked, `degraded` when a report was produced but something fell back (an LLM call failed, no source returned passages, or the Synthesizer cited a URL that was not retrieved), and `failed` when the pipeline raised an error. `report.warnings` lists what went wrong. Section `sources` only contain URLs of retrieved passages; any other URL the LLM writes is removed and counted in `warnings`.
+
 ```json
 {
   "session_id": "uuid",
   "query": "original question",
   "status": "completed",
   "report": {
+    "warnings": [],
     "summary": "2-3 sentence overview",
     "key_findings": ["finding 1", "finding 2", "finding 3"],
     "sections": [
@@ -151,8 +154,8 @@ curl http://localhost:8000/health
 | Agent | Role |
 |-------|------|
 | **PlannerAgent** | Uses Groq LLM to decompose the query into 3-5 focused sub-questions, ensuring full coverage of the topic. |
-| **ResearcherAgent** | Runs once per sub-question, all sub-questions concurrently. Each run searches Wikipedia, then arXiv, then DuckDuckGo only if fewer than 3 passages were found. Plain code, no LLM. |
-| **ExtractorAgent** | Uses `sentence-transformers` to embed query + passages and rank them by cosine similarity; keeps passages with similarity at least 0.15, up to 10. Plain code, no LLM. |
+| **ResearcherAgent** | Runs once per sub-question, all sub-questions concurrently. Each run searches Wikipedia (MediaWiki Action API full-text search with intro extracts), then arXiv, then DuckDuckGo (via the `ddgs` package) only if fewer than 3 passages were found. Plain code, no LLM. |
+| **ExtractorAgent** | Uses `sentence-transformers` to embed the query and passages in one call and rank them by cosine similarity; keeps passages with similarity at least 0.15, up to 10. Encode calls are serialised across sessions. Plain code, no LLM. |
 | **CriticAgent** | Asks the Groq LLM to list contradictions, knowledge gaps and potentially unreliable sources in up to 8 passages. Its accuracy has not been evaluated. |
 | **SynthesizerAgent** | Uses Groq LLM to build a structured report with summary, key findings, and cited sections. Retrieval similarity (the `confidence_score` field) = mean cosine similarity of the passages used. It measures how close the passages are to the question, not whether the report is correct. |
 
@@ -163,10 +166,10 @@ curl http://localhost:8000/health
 | Component | Tool | Why Free |
 |-----------|------|----------|
 | API framework | FastAPI + asyncio | Open source |
-| LLM | Groq, OpenAI-compatible API (default `llama-3.1-8b-instant`, retired 16 Aug 2026 — set `GROQ_MODEL`) | Free tier, no credit card |
+| LLM | Groq, OpenAI-compatible API (default `openai/gpt-oss-20b`; change with `GROQ_MODEL`) | Free tier, no credit card |
 | Embeddings | sentence-transformers `all-MiniLM-L6-v2` | Local, open source, 90MB |
 | Search | Wikipedia REST API + arXiv API | Official, no key needed |
-| Search fallback | duckduckgo-search | Free scraper library |
+| Search fallback | ddgs (successor of duckduckgo-search) | Free scraper library |
 | Database | SQLite + aiosqlite | No external service |
 | Streaming | sse-starlette | Open source |
 
@@ -180,27 +183,29 @@ curl http://localhost:8000/health
 
 **Why multi-source search?** Wikipedia for factual overviews, arXiv for cutting-edge research/technical topics, DuckDuckGo as a fallback for recent or niche topics. No single source covers everything.
 
-**Why asyncio.gather with return_exceptions=True?** One failing API call (DuckDuckGo rate limit, arXiv timeout) must not kill the entire pipeline. Today the fallbacks are silent: the final status does not show which stages failed (see Known Issues).
+**Why asyncio.gather with return_exceptions=True?** One failing API call (DuckDuckGo rate limit, arXiv timeout) must not kill the entire pipeline. LLM-stage fallbacks are reported: the session ends `degraded` with `report.warnings`. A single failing search source is not reported on its own.
 
-**Why sentence-transformers in asyncio.to_thread?** `encode()` is synchronous and CPU-bound. Running it directly in an async function blocks the entire event loop. `to_thread()` offloads it to a thread pool.
+**Why sentence-transformers in asyncio.to_thread?** `encode()` is synchronous and CPU-bound. Running it directly in an async function blocks the entire event loop. `to_thread()` offloads it to a thread pool, and a lock keeps two sessions from encoding at the same time.
 
 ---
 
-## Known Issues (checked 2026-10-28)
+## Known Issues (checked 2026-11-02)
 
-These were found by re-running the project with a fresh install. They are not fixed yet.
+Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU by default and embeds the query and passages in one call), the Wikipedia 404, the DuckDuckGo `Invalid impersonate` error, the retired default model, silent fallbacks, unchecked citations, the event log, and stale event queues. See the tests below for what was checked and how.
 
-- **Crash on Apple Silicon Macs on the first research request.** The Extractor runs two `SentenceTransformer.encode` calls at the same time in two threads. On an Apple Silicon Mac the library uses the Mac GPU backend (MPS) by default, and the parallel calls segfault the server (exit code 139, 3 of 3 runs on 2026-10-28; torch 2.14.1, sentence-transformers 6.2.0). The same code on the CPU (`device="cpu"`) passed 4 of 4 runs. Workarounds: load the model on the CPU, or embed the query and passages in one call. Not fixed yet.
-- **Wikipedia returns no results.** The code calls `https://en.wikipedia.org/api/rest_v1/page/search/title`, which returns HTTP 404. Wikipedia's title search is at `/w/rest.php/v1/search/title`.
-- **DuckDuckGo search errors.** `duckduckgo-search==6.2.6` fails with `BuilderError Invalid impersonate: "chrome_119"` against its current dependencies.
-- **Only arXiv returns passages today**, so non-technical questions may get no sources.
-- **Default model retired.** Groq shut down `llama-3.1-8b-instant` for free and developer tiers on 16 August 2026. Set `GROQ_MODEL` in `.env` to a current model, for example `openai/gpt-oss-20b` (Groq's suggested replacement).
-- **Fallbacks are silent.** If every LLM call fails, the session still ends with `status: completed` and a `confidence_score`. Only the stream shows the fallback messages.
-- **Citations are not checked.** URLs the Synthesizer puts in `sections[].sources` are not validated against the retrieved sources.
-- **Event log and queues.** Only the final `DONE` event is saved in `agent_events`. Event queues are not removed after a session ends, so `active_sessions` in `/health` keeps growing and re-opening a finished stream waits with no data.
+- **Not re-run against the live services.** The environment used for these fixes could not reach Groq, Wikipedia, DuckDuckGo, arXiv or Hugging Face. The fixes are covered by tests with fake services, and the new Wikipedia request follows the [MediaWiki Action API](https://www.mediawiki.org/wiki/API:Search) (`action=query&generator=search&prop=extracts`), but a real end-to-end run is still to do. The macOS fix follows the CPU workaround that passed 4 of 4 runs on 2026-10-28; it was not re-tested on a Mac.
+- **Model choice.** `GROQ_MODEL` defaults to `openai/gpt-oss-20b`, the replacement Groq lists for `llama-3.1-8b-instant` on its [deprecations page](https://console.groq.com/docs/deprecations) and a production model on its [models page](https://console.groq.com/docs/models) (both checked 2026-11-02). It is a reasoning model, so the Synthesizer's `max_tokens` was raised to 4096. Groq retires models often; if `/research` ends `degraded` with a 404 from Groq, pick a current model from that page.
+- **DuckDuckGo is a scraper.** `ddgs` can be rate-limited or break when the site changes; failures return no passages.
+- **Citations are checked against URLs only.** The Synthesizer can only cite retrieved URLs now, but whether a cited passage supports the sentence is not checked.
+- **A finished session's stream is a replay.** Once a session ends, `GET /research/{id}/stream` returns the saved events at once. The live queue of a session nobody streams is dropped 5 minutes after it finishes.
 - **Not deployable on Vercel serverless.** `sentence-transformers` pulls in PyTorch, so the install bundle is about 5.6 GB, above Vercel's 500 MB function limit. Run it locally or in a container on a VM instead.
 - **No authentication or rate limit.** `/sessions` lists every user's queries.
 
 ## Tests
 
-There are no automated tests yet.
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests -v
+```
+
+21 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. They cover the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, and follow-ups. They passed on 2026-11-02 (Python 3.12).

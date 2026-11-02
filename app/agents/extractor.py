@@ -1,7 +1,18 @@
 import asyncio
+import threading
 import numpy as np
 from app.agents.base import BaseAgent
 from app.config import settings
+
+
+# Serialise encode() calls across sessions too, so concurrent research
+# requests never run the model in two threads at once.
+_ENCODE_LOCK = threading.Lock()
+
+
+def _encode(embedder, texts: list[str]):
+    with _ENCODE_LOCK:
+        return embedder.encode(texts)
 
 
 class ExtractorAgent(BaseAgent):
@@ -18,12 +29,11 @@ class ExtractorAgent(BaseAgent):
 
         texts = [p["text"] for p in passages]
 
-        query_embedding, passage_embeddings = await asyncio.gather(
-            asyncio.to_thread(self.embedder.encode, [query]),
-            asyncio.to_thread(self.embedder.encode, texts),
-        )
-
-        query_vec = query_embedding[0]
+        # One encode call for the query and all passages. Two concurrent
+        # encode() calls in separate threads segfaulted on Apple Silicon (MPS).
+        embeddings = await asyncio.to_thread(_encode, self.embedder, [query] + texts)
+        query_vec = embeddings[0]
+        passage_embeddings = embeddings[1:]
         similarities = []
         for i, pv in enumerate(passage_embeddings):
             sim = float(np.dot(query_vec, pv) / (np.linalg.norm(query_vec) * np.linalg.norm(pv) + 1e-9))
