@@ -1,7 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from sentence_transformers import SentenceTransformer
 from sqlalchemy import text
 
 from app.config import settings
@@ -9,14 +8,24 @@ from app.database import engine, Base
 from app.api.research import router as research_router
 from app.api.stream import router as stream_router
 from app.api.sessions import router as sessions_router
+from app.pipeline.events import active_session_count
+
+
+def load_embedder():
+    """Load the sentence-transformers model (imported here so tests can skip torch)."""
+    from sentence_transformers import SentenceTransformer
+
+    # device=None lets the library choose (MPS on Apple Silicon, which crashed).
+    device = settings.embedder_device or None
+    return SentenceTransformer(settings.embedder_model, device=device)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Preload embedder to avoid cold-start on first request
     print("Loading sentence-transformers embedder...")
-    app.state.embedder = SentenceTransformer(settings.embedder_model)
-    print(f"Embedder loaded: {settings.embedder_model}")
+    app.state.embedder = load_embedder()
+    print(f"Embedder loaded: {settings.embedder_model} (device={settings.embedder_device or 'auto'})")
 
     # Initialize SQLite tables
     async with engine.begin() as conn:
@@ -73,5 +82,5 @@ async def health():
         "embedder": embedder_status,
         "db": db_status,
         "model": settings.groq_model,
-        "active_sessions": len(app.state.event_queues) if hasattr(app.state, "event_queues") else 0,
+        "active_sessions": active_session_count(getattr(app.state, "event_queues", {})),
     }

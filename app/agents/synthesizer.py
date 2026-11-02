@@ -6,9 +6,28 @@ from app.agents.base import BaseAgent
 from app.config import settings
 
 
+def filter_citations(sections: list, allowed_urls: set[str]) -> tuple[list[dict], int]:
+    """
+    Keep only section sources that are URLs of passages given to the LLM.
+    Returns (sections, number of citations removed).
+    """
+    cleaned, removed = [], 0
+    for section in sections if isinstance(sections, list) else []:
+        if not isinstance(section, dict):
+            continue
+        sources = section.get("sources") or []
+        if not isinstance(sources, list):
+            sources = [sources]
+        kept = [u for u in sources if isinstance(u, str) and u.strip() in allowed_urls]
+        removed += len(sources) - len(kept)
+        cleaned.append({**section, "sources": [u.strip() for u in kept]})
+    return cleaned, removed
+
+
 class SynthesizerAgent(BaseAgent):
     def __init__(self):
         super().__init__("SynthesizerAgent")
+        self.removed_citations = 0
 
     async def run(
         self,
@@ -62,13 +81,15 @@ class SynthesizerAgent(BaseAgent):
                         ],
                         "response_format": {"type": "json_object"},
                         "temperature": 0.4,
-                        "max_tokens": 2048,
+                        # Room for reasoning tokens: gpt-oss models count them here.
+                        "max_tokens": 4096,
                     },
                 )
                 resp.raise_for_status()
                 content = resp.json()["choices"][0]["message"]["content"]
                 synthesis = json.loads(content)
         except Exception as e:
+            self.error = f"{e.__class__.__name__}: {e}"
             await self.emit(queue, "SYNTHESIZING", f"Synthesizer fallback: {e}", {"error": str(e)})
             synthesis = {
                 "summary": f"Research on: {query}",
@@ -78,10 +99,15 @@ class SynthesizerAgent(BaseAgent):
 
         confidence = float(np.mean([p.get("similarity", 0.5) for p in passages])) if passages else 0.0
 
+        sections, self.removed_citations = filter_citations(
+            synthesis.get("sections", []),
+            {p.get("url", "") for p in passages[:10] if p.get("url")},
+        )
+
         report = {
             "summary": synthesis.get("summary", ""),
             "key_findings": synthesis.get("key_findings", []),
-            "sections": synthesis.get("sections", []),
+            "sections": sections,
             "sources": sources_list,
             "confidence_score": round(confidence, 4),
             "gaps_identified": gaps,

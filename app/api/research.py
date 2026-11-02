@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
@@ -6,7 +5,8 @@ from sqlalchemy import select
 
 from app.database import AsyncSessionLocal
 from app.models.session import ResearchSession
-from app.pipeline.orchestrator import run_pipeline, run_followup_pipeline
+from app.pipeline.orchestrator import run_pipeline, run_followup_pipeline, FINISHED_STATUSES
+from app.pipeline.events import EventQueue, release_queue
 
 router = APIRouter()
 
@@ -19,14 +19,23 @@ class FollowUpRequest(BaseModel):
     question: str
 
 
+async def _run_then_release(pipeline, queues: dict, session_id: str, queue, *args):
+    """Run a pipeline, then mark its event queue finished so it can be dropped."""
+    try:
+        await pipeline(session_id, *args, queue)
+    finally:
+        release_queue(queues, session_id, queue)
+
+
 @router.post("/research")
 async def start_research(req: ResearchRequest, request: Request, background_tasks: BackgroundTasks):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
     session_id = str(uuid.uuid4())
-    queue: asyncio.Queue = asyncio.Queue()
-    request.app.state.event_queues[session_id] = queue
+    queues = request.app.state.event_queues
+    queue = EventQueue()
+    queues[session_id] = queue
 
     async with AsyncSessionLocal() as db:
         session = ResearchSession(id=session_id, query=req.query.strip(), status="pending")
@@ -34,7 +43,9 @@ async def start_research(req: ResearchRequest, request: Request, background_task
         await db.commit()
 
     embedder = request.app.state.embedder
-    background_tasks.add_task(run_pipeline, session_id, req.query.strip(), embedder, queue)
+    background_tasks.add_task(
+        _run_then_release, run_pipeline, queues, session_id, queue, req.query.strip(), embedder
+    )
 
     return {"session_id": session_id, "status": "running", "stream_url": f"/research/{session_id}/stream"}
 
@@ -79,15 +90,18 @@ async def followup_research(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.status not in ("completed", "failed"):
+    if session.status not in FINISHED_STATUSES:
         raise HTTPException(status_code=400, detail="Session must be completed before follow-up")
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    queue: asyncio.Queue = asyncio.Queue()
-    request.app.state.event_queues[session_id] = queue
+    queues = request.app.state.event_queues
+    queue = EventQueue()
+    queues[session_id] = queue
 
     embedder = request.app.state.embedder
     background_tasks.add_task(
-        run_followup_pipeline, session_id, req.question.strip(), embedder, queue
+        _run_then_release, run_followup_pipeline, queues, session_id, queue, req.question.strip(), embedder
     )
 
     return {

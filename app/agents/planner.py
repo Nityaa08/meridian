@@ -39,10 +39,13 @@ class PlannerAgent(BaseAgent):
                 parsed = json.loads(content)
                 sub_questions = parsed.get("sub_questions", [query])
         except Exception as e:
+            self.error = f"{e.__class__.__name__}: {e}"
             await self.emit(queue, "PLANNING", f"Planner fallback: {e}", {"error": str(e)})
             sub_questions = [query]
 
-        sub_questions = sub_questions[:5] if len(sub_questions) > 5 else sub_questions
+        if not isinstance(sub_questions, list) or not sub_questions:
+            sub_questions = [query]
+        sub_questions = [str(q) for q in sub_questions][:5]
         await self.emit(
             queue, "PLANNING",
             f"Identified {len(sub_questions)} sub-questions",

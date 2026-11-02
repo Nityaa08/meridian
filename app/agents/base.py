@@ -17,6 +17,8 @@ class AgentEvent:
 class BaseAgent(ABC):
     def __init__(self, name: str):
         self.name = name
+        # Set when an LLM-backed agent fell back to a default result.
+        self.error: str | None = None
 
     async def emit(self, queue: asyncio.Queue, event_type: str, message: str, data: dict = None):
         event = AgentEvent(
