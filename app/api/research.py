@@ -1,7 +1,7 @@
 import uuid
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.database import AsyncSessionLocal
 from app.models.session import ResearchSession
@@ -19,6 +19,19 @@ class FollowUpRequest(BaseModel):
     question: str
 
 
+def _progress_saver(session_id: str):
+    """Saves a running session's event log, so any worker can stream it from the DB."""
+    async def save(history: list[dict]) -> None:
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                update(ResearchSession)
+                .where(ResearchSession.id == session_id)
+                .values(agent_events=history)
+            )
+            await db.commit()
+    return save
+
+
 async def _run_then_release(pipeline, queues: dict, session_id: str, queue, *args):
     """Run a pipeline, then mark its event queue finished so it can be dropped."""
     try:
@@ -34,7 +47,7 @@ async def start_research(req: ResearchRequest, request: Request, background_task
 
     session_id = str(uuid.uuid4())
     queues = request.app.state.event_queues
-    queue = EventQueue()
+    queue = EventQueue(on_change=_progress_saver(session_id))
     queues[session_id] = queue
 
     async with AsyncSessionLocal() as db:
@@ -96,7 +109,7 @@ async def followup_research(
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
     queues = request.app.state.event_queues
-    queue = EventQueue()
+    queue = EventQueue(on_change=_progress_saver(session_id))
     queues[session_id] = queue
 
     embedder = request.app.state.embedder

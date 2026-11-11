@@ -136,6 +136,28 @@ class TestCitations:
 # ─── Event queues ─────────────────────────────────────────────────────────────
 
 class TestEventQueue:
+    def test_progress_is_saved_while_running(self):
+        from app.pipeline import events as ev
+        from app.agents.base import AgentEvent
+
+        saved: list[list[dict]] = []
+
+        async def on_change(history):
+            saved.append(history)
+
+        async def run():
+            ev.PROGRESS_SAVE_INTERVAL_S = 0.01
+            q = ev.EventQueue(on_change=on_change)
+            for i in range(3):  # a burst becomes one write
+                await q.put(AgentEvent(agent="researcher", type="SEARCHING", message=f"m{i}"))
+            await asyncio.sleep(0.05)
+            await q.put(AgentEvent(agent="orchestrator", type="DONE", message="done"))
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run())
+        assert len(saved) == 2
+        assert [e["message"] for e in saved[-1]] == ["m0", "m1", "m2", "done"]
+
     def test_records_history_and_release(self):
         async def go():
             queues = {}
@@ -237,6 +259,60 @@ class TestApi:
 
     def test_unknown_stream_404(self, client):
         assert client.get("/research/does-not-exist/stream").status_code == 404
+
+    def test_stream_follows_a_session_running_on_another_worker(self, client):
+        """No local queue, session still running elsewhere: stream it from the DB log."""
+        import uuid
+        from sqlalchemy import update
+        from app.database import AsyncSessionLocal
+        from app.models.session import ResearchSession
+        from app.api import stream as stream_mod
+
+        if not (hasattr(client, "portal") and client.portal):
+            pytest.skip("TestClient portal not available")
+
+        sid = str(uuid.uuid4())
+        first = [{"type": "PLANNING", "message": "planning"}, {"type": "SEARCHING", "message": "searching"}]
+
+        class FakeRequest:
+            async def is_disconnected(self):
+                return False
+
+        async def scenario():
+            stream_mod.FOLLOW_POLL_S = 0.01
+            async with AsyncSessionLocal() as db:
+                db.add(ResearchSession(id=sid, query="q", status="running", agent_events=first))
+                await db.commit()
+            gen = stream_mod._follow_from_db(sid, FakeRequest())
+            got = [json.loads((await gen.__anext__())["data"]) for _ in range(2)]
+            # The owning worker finishes the session.
+            async with AsyncSessionLocal() as db:
+                await db.execute(update(ResearchSession).where(ResearchSession.id == sid).values(
+                    status="completed", agent_events=first + [{"type": "DONE", "message": "done"}]))
+                await db.commit()
+            got += [json.loads(e["data"]) async for e in gen]
+            return got
+
+        events = client.portal.call(scenario)
+        assert [e["type"] for e in events] == ["PLANNING", "SEARCHING", "DONE"]
+        assert client.get(f"/research/{sid}/stream").status_code == 200
+
+    def test_running_session_without_local_queue_is_not_404(self, client):
+        import uuid
+        from app.database import AsyncSessionLocal
+        from app.models.session import ResearchSession
+
+        if not (hasattr(client, "portal") and client.portal):
+            pytest.skip("TestClient portal not available")
+        sid = str(uuid.uuid4())
+
+        async def add():
+            async with AsyncSessionLocal() as db:
+                db.add(ResearchSession(id=sid, query="q", status="failed",
+                                       agent_events=[{"type": "ERROR", "message": "boom"}]))
+                await db.commit()
+        client.portal.call(add)
+        assert _events(client.get(f"/research/{sid}/stream").text)[-1]["type"] == "ERROR"
 
     def test_health(self, client):
         body = client.get("/health").json()
