@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meridian Research Pipeline</title>
+<meta name="description" content="A five-stage research pipeline: plan, search Wikipedia and arXiv concurrently, rank passages, critique and write a cited report, streamed live. A demo by Nityashree S.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f5f5f2; --surface:#ffffff; --ink:#0b0b0c; --ink-2:#4a4a48; --ink-3:#7a7a76;
+  --line:#e2e2dc; --line-2:#cfcfc8; --chip:#ecece7; --warn:#8a4b0f; --warn-bg:#f6ecdf;
+  --ok:#24563f; --ok-bg:#e3eee7;
+  --font:"Schibsted Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0b0b0c; --surface:#151516; --ink:#f5f5f2; --ink-2:#c3c3bd; --ink-3:#8b8b85;
+    --line:#26262a; --line-2:#36363b; --chip:#1e1e21; --warn:#f0b878; --warn-bg:#2a2117;
+    --ok:#9fd3b6; --ok-bg:#16241d;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-underline-offset:3px}
+code{font-family:var(--mono);font-size:.9em}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{border-bottom:1px solid var(--line)}
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;height:60px}
+.brand{font-weight:700;letter-spacing:-.01em;white-space:nowrap}
+.brand span{color:var(--ink-3);font-weight:500}
+nav{display:flex;gap:18px;font-size:14px;color:var(--ink-2);white-space:nowrap}
+nav a{text-decoration:none}
+nav a:hover{color:var(--ink);text-decoration:underline}
+.hero{padding:44px 0 22px}
+.eyebrow{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+h1{font-size:clamp(28px,4.4vw,44px);line-height:1.08;letter-spacing:-.025em;font-weight:700;margin:10px 0 12px;max-width:780px}
+.lede{color:var(--ink-2);max-width:700px;font-size:16px}
+.mode{display:flex;gap:10px;align-items:flex-start;border-radius:10px;padding:12px 14px;font-size:14px;margin:0 0 20px}
+.mode.demo{background:var(--warn-bg);color:var(--warn)}
+.mode.live{background:var(--ok-bg);color:var(--ok)}
+.mode b{white-space:nowrap}
+.ask{display:flex;gap:10px}
+.ask input{flex:1;min-width:0;font:inherit;font-size:16px;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:12px 14px;outline:none}
+.ask input:focus{border-color:var(--ink);box-shadow:0 0 0 3px color-mix(in srgb,var(--ink) 12%,transparent)}
+.btn{font:inherit;font-weight:600;font-size:15px;background:var(--ink);color:var(--bg);border:0;border-radius:10px;padding:12px 18px;cursor:pointer;white-space:nowrap}
+.btn:disabled{opacity:.55;cursor:wait}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chips button{font:inherit;font-size:12.5px;border:1px solid var(--line-2);background:var(--bg);color:var(--ink-2);padding:6px 10px;border-radius:999px;cursor:pointer}
+.chips button:hover{border-color:var(--ink)}
+.grid{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:20px;align-items:start;margin-top:20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px}
+.card h2{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:14px}
+.stages{list-style:none}
+.stage{position:relative;padding:0 0 18px 26px}
+.stage:last-child{padding-bottom:0}
+.stage::before{content:"";position:absolute;left:6px;top:18px;bottom:0;width:1px;background:var(--line-2)}
+.stage:last-child::before{display:none}
+.dot{position:absolute;left:0;top:4px;width:13px;height:13px;border-radius:50%;border:2px solid var(--line-2);background:var(--surface)}
+.stage.active .dot{border-color:var(--ink);animation:pulse 1s ease-in-out infinite}
+.stage.done .dot{background:var(--ink);border-color:var(--ink)}
+.stage.warn .dot{background:var(--warn);border-color:var(--warn)}
+@keyframes pulse{50%{box-shadow:0 0 0 4px color-mix(in srgb,var(--ink) 15%,transparent)}}
+.stage b{display:block;font-size:14px}
+.stage .what{font-size:12px;color:var(--ink-3)}
+.stage .log{font-size:12.5px;color:var(--ink-2);margin-top:4px}
+.stage .log div{padding:1px 0}
+.tag{display:inline-block;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:1px}
+.tag.sim{background:var(--warn-bg);color:var(--warn)}
+.tag.real{background:var(--chip);color:var(--ink-2)}
+.empty{color:var(--ink-3);padding:40px 0;text-align:center}
+.summary{font-size:17px;line-height:1.55}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 4px}
+.meta span{font-size:12px;background:var(--chip);color:var(--ink-2);padding:3px 8px;border-radius:6px;font-variant-numeric:tabular-nums}
+.r-h{font-size:13px;font-weight:600;color:var(--ink-3);margin:22px 0 8px;letter-spacing:.04em;text-transform:uppercase}
+.findings{padding-left:18px}
+.findings li{margin:6px 0;color:var(--ink-2)}
+.section{border-top:1px solid var(--line);padding:12px 0}
+.section b{display:block;margin-bottom:4px}
+.section p{color:var(--ink-2);font-size:14px}
+.cites{font-size:12px;color:var(--ink-3);margin-top:6px;word-break:break-all}
+.sources{list-style:none}
+.sources li{display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+.sources small{display:block;color:var(--ink-3);font-size:11.5px}
+.rel{height:6px;border-radius:3px;background:var(--chip);overflow:hidden}
+.rel div{height:100%;background:var(--ink)}
+.rel-n{font-size:11px;color:var(--ink-3);text-align:right;font-variant-numeric:tabular-nums}
+.gaps li{margin:4px 0 4px 18px;color:var(--ink-2);font-size:14px}
+.err{background:var(--warn-bg);color:var(--warn);border-radius:9px;padding:12px 14px;font-size:14px}
+.sec{padding:44px 0 8px}
+.sec h3{font-size:22px;letter-spacing:-.015em;margin-bottom:6px}
+.diagram{margin-top:18px;overflow-x:auto}
+.diagram svg{display:block;min-width:760px;width:100%;height:auto}
+.steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}
+.step{border-top:2px solid var(--ink);padding-top:10px;font-size:14px;color:var(--ink-2)}
+.step b{display:block;color:var(--ink);margin-bottom:2px}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.6;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;overflow-x:auto;margin-top:16px;color:var(--ink-2)}
+footer{border-top:1px solid var(--line);margin-top:48px;padding:24px 0 40px;color:var(--ink-3);font-size:13px}
+footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+@media (max-width:860px){
+  .grid{grid-template-columns:1fr}
+  .steps{grid-template-columns:1fr 1fr}
+  nav .hide-sm,.brand span{display:none}
+  nav{gap:14px}
+  .wrap{padding:0 16px}
+  .ask{flex-direction:column}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap top">
+    <div class="brand">Meridian <span>· demo</span></div>
+    <nav>
+      <a href="#how">How it works</a>
+      <a class="hide-sm" href="#api">API</a>
+      <a href="https://github.com/Nityaa08/meridian">GitHub</a>
+      <a class="hide-sm" href="https://nityashree.in">Portfolio</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div class="eyebrow">Python · FastAPI · asyncio · Server-Sent Events</div>
+    <h1>Ask a research question and watch the pipeline work on it.</h1>
+    <p class="lede">Meridian splits a question into sub-questions, searches Wikipedia and arXiv for each one concurrently, ranks the passages against the question, reviews them for gaps and writes a report that may only cite what it retrieved. Every stage streams to this page as it happens.</p>
+  </section>
+
+  <div class="mode demo" id="mode" role="note">
+    <b>Demo mode.</b>
+    <span id="mode-text">Search and ranking are real: live Wikipedia and arXiv results. The planner, critic and writer are simulated, because this public demo has no LLM key: sub-questions come from templates, the critique only counts sources, and the report quotes the top passages instead of summarising them.</span>
+  </div>
+
+  <form id="form" class="ask">
+    <input id="q" maxlength="200" value="How does transformer attention work?" aria-label="Research question" autocomplete="off">
+    <button class="btn" id="go" type="submit">Research</button>
+  </form>
+  <div class="chips" id="examples"></div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Pipeline</h2>
+      <ol class="stages" id="stages"></ol>
+    </section>
+    <section class="card" id="report" aria-live="polite">
+      <h2>Report</h2>
+      <div class="empty">Ask a question to start. A run takes a few seconds.</div>
+    </section>
+  </div>
+
+  <section class="sec" id="how">
+    <h3>How it works</h3>
+    <p class="lede">Five stages in an asyncio pipeline. The sub-questions are searched concurrently with <code>asyncio.gather</code>, so one slow or failing source cannot stop the run; each stage pushes events to a queue that the HTTP response streams out.</p>
+    <div class="diagram">
+      <svg viewBox="0 0 980 198" role="img" aria-labelledby="dg-t">
+        <title id="dg-t">Question to planner, then three concurrent researchers, then extractor, critic and synthesizer, then a cited report; every stage streams events.</title>
+        <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-3)"/></marker></defs>
+        <g fill="none" stroke="var(--ink-3)" stroke-width="1.4">
+          <path d="M104 80 H126" marker-end="url(#a)"/>
+          <path d="M246 80 H262 V30 H280" marker-end="url(#a)"/>
+          <path d="M262 80 H280" marker-end="url(#a)"/>
+          <path d="M262 80 V130 H280" marker-end="url(#a)"/>
+          <path d="M400 30 H418 V80 H436" marker-end="url(#a)"/>
+          <path d="M400 80 H436"/>
+          <path d="M400 130 H418 V80"/>
+          <path d="M556 80 H574" marker-end="url(#a)"/>
+          <path d="M694 80 H712" marker-end="url(#a)"/>
+          <path d="M832 80 H850" marker-end="url(#a)"/>
+          <path d="M54 106 V176 H912 V106" stroke-dasharray="3 3"/>
+        </g>
+        <g font-family="Schibsted Grotesk, system-ui, sans-serif" font-size="13" text-anchor="middle">
+          <rect x="4" y="56" width="100" height="48" rx="9" fill="var(--surface)" stroke="var(--line-2)"/>
+          <text x="54" y="85" fill="var(--ink)" font-weight="600">Question</text>
+          <rect x="128" y="56" width="118" height="48" rx="9" fill="var(--ink)"/>
+          <text x="187" y="77" fill="var(--bg)" font-weight="600">Planner</text>
+          <text x="187" y="93" fill="var(--bg)" font-size="11" opacity=".75">LLM: sub-questions</text>
+          <rect x="282" y="10" width="118" height="40" rx="9" fill="var(--surface)" stroke="var(--line-2)"/>
+          <text x="341" y="34" fill="var(--ink)" font-weight="600">Researcher</text>
+          <rect x="282" y="60" width="118" height="40" rx="9" fill="var(--surface)" stroke="var(--line-2)"/>
+          <text x="341" y="84" fill="var(--ink)" font-weight="600">Researcher</text>
+          <rect x="282" y="110" width="118" height="40" rx="9" fill="var(--surface)" stroke="var(--line-2)"/>
+          <text x="341" y="134" fill="var(--ink)" font-weight="600">Researcher</text>
+          <rect x="438" y="56" width="118" height="48" rx="9" fill="var(--ink)"/>
+          <text x="497" y="77" fill="var(--bg)" font-weight="600">Extractor</text>
+          <text x="497" y="93" fill="var(--bg)" font-size="11" opacity=".75">embed + cosine rank</text>
+          <rect x="576" y="56" width="118" height="48" rx="9" fill="var(--ink)"/>
+          <text x="635" y="77" fill="var(--bg)" font-weight="600">Critic</text>
+          <text x="635" y="93" fill="var(--bg)" font-size="11" opacity=".75">LLM: gaps, conflicts</text>
+          <rect x="714" y="56" width="118" height="48" rx="9" fill="var(--ink)"/>
+          <text x="773" y="77" fill="var(--bg)" font-weight="600">Synthesizer</text>
+          <text x="773" y="93" fill="var(--bg)" font-size="11" opacity=".75">LLM: cited report</text>
+          <rect x="852" y="56" width="120" height="48" rx="9" fill="var(--surface)" stroke="var(--line-2)"/>
+          <text x="912" y="77" fill="var(--ink)" font-weight="600">Report</text>
+          <text x="912" y="93" fill="var(--ink-3)" font-size="11">citations checked</text>
+          <text x="341" y="166" fill="var(--ink-3)" font-size="11">Wikipedia + arXiv (+ DuckDuckGo if few)</text>
+          <text x="660" y="193" fill="var(--ink-3)" font-size="11">every stage emits events → streamed as SSE</text>
+        </g>
+      </svg>
+    </div>
+    <div class="steps">
+      <div class="step"><b>Concurrent search</b>Sub-questions run in parallel; a failing source returns nothing instead of failing the run.</div>
+      <div class="step"><b>Ranked evidence</b>Passages are embedded with the question and kept above a similarity threshold.</div>
+      <div class="step"><b>Checked citations</b>The report may only cite retrieved URLs; anything else is removed and counted.</div>
+      <div class="step"><b>Honest status</b>A run that fell back anywhere ends <code>degraded</code> with the reasons listed.</div>
+    </div>
+  </section>
+
+  <section class="sec" id="api">
+    <h3>Stream it yourself</h3>
+    <p class="lede">The page reads the same endpoint. Public use is limited to a few questions an hour per visitor.</p>
+    <pre id="snippet"></pre>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Built by <a href="https://nityashree.in">Nityashree S</a> · <a href="https://github.com/Nityaa08/meridian">Source on GitHub</a></span>
+    <span><a href="/health">/health</a> · <a href="/docs">API docs</a></span>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const STAGES = [
+    ["PlannerAgent", "Planner", "Splits the question into sub-questions", true],
+    ["ResearcherAgent", "Researchers", "Search Wikipedia and arXiv, concurrently", false],
+    ["ExtractorAgent", "Extractor", "Embeds and ranks passages against the question", false],
+    ["CriticAgent", "Critic", "Looks for gaps and contradictions", true],
+    ["SynthesizerAgent", "Synthesizer", "Writes the report, citing only retrieved sources", true],
+  ];
+  const EXAMPLES = ["How does transformer attention work?", "What is retrieval-augmented generation?", "How do vaccines train the immune system?", "What causes inflation?"];
+  let simulated = true;
+
+  for (const q of EXAMPLES) {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = q;
+    b.onclick = () => { $("q").value = q; run(); };
+    $("examples").appendChild(b);
+  }
+  $("snippet").textContent = `curl -N "${location.origin}/api/research?q=How+does+transformer+attention+work"
+
+data: {"agent": "PlannerAgent", "type": "PLANNING", "message": "Identified 4 sub-questions", ...}
+data: {"agent": "ResearcherAgent", "type": "SEARCHING", "message": "Found 4 passages for: ...", ...}
+...
+data: {"agent": "Orchestrator", "type": "REPORT", "data": {"status": "completed", "report": {...}}}`;
+
+  function drawStages() {
+    $("stages").innerHTML = STAGES.map(([id, name, what, llm]) =>
+      `<li class="stage" id="st-${id}"><span class="dot"></span><b>${name}${llm ? `<span class="tag ${simulated ? "sim" : "real"}">${simulated ? "simulated" : "LLM"}</span>` : ""}</b><div class="what">${what}</div><div class="log"></div></li>`).join("");
+  }
+  function setMode(sim, llm) {
+    simulated = sim;
+    if (!sim) {
+      $("mode").className = "mode live";
+      $("mode").querySelector("b").textContent = "Live.";
+      $("mode-text").textContent = "Every stage is real: Wikipedia and arXiv search, embedding-based ranking, and an LLM (" + llm + ") for planning, critique and the report. Ranking uses a lexical embedder on this free host.";
+    }
+  }
+  drawStages();
+  fetch("/health").then(r => r.json()).then(h => { if (h.llm && !h.llm.startsWith("simulated")) { setMode(false, h.llm); drawStages(); } }).catch(() => {});
+
+  function onEvent(ev) {
+    if (ev.type === "START") { if (ev.data && ev.data.simulated_llm === false) setMode(false, "Groq"); return; }
+    if (ev.type === "REPORT") { renderReport(ev.data); finishStages(ev.data); return; }
+    if (ev.type === "ERROR") { $("report").innerHTML = `<h2>Report</h2><div class="err">${esc(ev.message)}</div>`; return; }
+    const el = $("st-" + ev.agent); if (!el) return;
+    const idx = STAGES.findIndex(s => s[0] === ev.agent);
+    STAGES.forEach((s, i) => { const e = $("st-" + s[0]); if (i < idx && !e.classList.contains("warn")) { e.classList.remove("active"); e.classList.add("done"); } });
+    el.classList.add("active");
+    if (/fallback/i.test(ev.message)) el.classList.add("warn");
+    const line = document.createElement("div"); line.textContent = ev.message;
+    el.querySelector(".log").appendChild(line);
+  }
+  function finishStages(res) {
+    STAGES.forEach(s => { const e = $("st-" + s[0]); e.classList.remove("active"); if (!e.classList.contains("warn")) e.classList.add("done"); });
+  }
+
+  function renderReport(res) {
+    const r = res.report, m = res.metadata;
+    let h = `<h2>Report <span class="tag ${res.status === "completed" ? "real" : "sim"}">${esc(res.status)}</span></h2>`;
+    h += `<p class="summary">${esc(r.summary)}</p>`;
+    h += `<div class="meta"><span>${m.sub_questions.length} sub-questions</span><span>${m.sources_searched} passages found</span><span>${m.sources_used} used</span><span>retrieval similarity ${r.confidence_score.toFixed(2)}</span><span>${(m.total_time_ms / 1000).toFixed(1)} s</span></div>`;
+    if (r.simulated_llm) h += `<div class="cites">Simulated writer: the summary and findings are quoted from the top-ranked passages, not written by a model.</div>`;
+    if (r.key_findings && r.key_findings.length) h += `<div class="r-h">Key findings</div><ul class="findings">${r.key_findings.map(f => `<li>${esc(f)}</li>`).join("")}</ul>`;
+    if (r.sections && r.sections.length) {
+      h += `<div class="r-h">Sections</div>` + r.sections.map(s => `<div class="section"><b>${esc(s.title)}</b><p>${esc(s.content)}</p>${s.sources && s.sources.length ? `<div class="cites">Cites: ${s.sources.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\//, ""))}</a>`).join(" · ")}</div>` : ""}</div>`).join("");
+    }
+    if (r.sources && r.sources.length) {
+      const max = Math.max(...r.sources.map(s => s.relevance_score), 0.01);
+      h += `<div class="r-h">Ranked sources</div><ul class="sources">${r.sources.map(s => `<li><span><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a><small>${esc(s.url.replace(/^https?:\/\//, "").split("/")[0])}</small></span><span><div class="rel"><div style="width:${(s.relevance_score / max * 100).toFixed(0)}%"></div></div><div class="rel-n">${s.relevance_score.toFixed(3)}</div></span></li>`).join("")}</ul>`;
+    }
+    if (r.gaps_identified && r.gaps_identified.length) h += `<div class="r-h">Gaps noted</div><ul class="gaps">${r.gaps_identified.map(g => `<li>${esc(g)}</li>`).join("")}</ul>`;
+    if (r.warnings && r.warnings.length) h += `<div class="r-h">Warnings</div><ul class="gaps">${r.warnings.map(g => `<li>${esc(g)}</li>`).join("")}</ul>`;
+    $("report").innerHTML = h;
+  }
+
+  async function run(e) {
+    if (e) e.preventDefault();
+    const q = $("q").value.trim(); if (!q) return;
+    const btn = $("go"); btn.disabled = true; btn.textContent = "Researching…";
+    drawStages();
+    $("report").innerHTML = `<h2>Report</h2><div class="empty">Working… stages appear on the left as they run.</div>`;
+    try {
+      const res = await fetch("/api/research?q=" + encodeURIComponent(q), { headers: { Accept: "text/event-stream" } });
+      if (!res.ok) {
+        let msg = "HTTP " + res.status; try { msg = (await res.json()).error || msg; } catch (x) {}
+        $("report").innerHTML = `<h2>Report</h2><div class="err">${esc(msg)}</div>`; return;
+      }
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read(); if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+          for (const line of chunk.split("\n")) if (line.startsWith("data: ")) { try { onEvent(JSON.parse(line.slice(6))); } catch (x) {} }
+        }
+      }
+    } catch (err) {
+      $("report").innerHTML = `<h2>Report</h2><div class="err">Network error: the stream was interrupted.</div>`;
+    } finally { btn.disabled = false; btn.textContent = "Research"; }
+  }
+  $("form").addEventListener("submit", run);
+})();
+</script>
+</body>
+</html>

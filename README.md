@@ -1,6 +1,10 @@
 # Meridian — Multi-Agent Research Intelligence API
 
+**Live demo: [meridian-research.vercel.app](https://meridian-research.vercel.app)** (real search and ranking; LLM stages simulated unless a key is set) · by [Nityashree S](https://nityashree.in)
+
 > A five-stage research pipeline: an LLM splits your question into sub-questions, the sub-questions are searched concurrently, local embeddings rank the passages, an LLM reviews them for gaps and contradictions, and an LLM writes a structured report — with every stage streamed live over Server-Sent Events.
+
+[![Demo page: the five pipeline stages streaming on the left and the cited report on the right](docs/screenshot.png)](https://meridian-research.vercel.app)
 
 ---
 
@@ -11,6 +15,26 @@ A basic retrieval system fires one query and returns one chunk. Meridian tries a
 ---
 
 ## How It Works
+
+```mermaid
+flowchart LR
+    Q[Question] --> P[PlannerAgent<br/>LLM: 3-5 sub-questions]
+    P --> R1[ResearcherAgent]
+    P --> R2[ResearcherAgent]
+    P --> R3[ResearcherAgent]
+    subgraph search [asyncio.gather, one per sub-question]
+        R1
+        R2
+        R3
+    end
+    W[(Wikipedia<br/>arXiv<br/>DuckDuckGo if few)] -.-> search
+    search --> E[ExtractorAgent<br/>embed + cosine rank<br/>top 10 over 0.15]
+    E --> C[CriticAgent<br/>LLM: gaps, contradictions]
+    C --> S[SynthesizerAgent<br/>LLM: report, citations checked]
+    S --> Rep[Report JSON<br/>completed or degraded + warnings]
+    P & search & E & C & S -. events .-> SSE[[SSE stream]]
+```
+
 
 ```
 POST /research  →  query arrives
@@ -45,12 +69,28 @@ Each step streams live to `GET /research/{id}/stream` as Server-Sent Events.
 
 ---
 
+## The Live Demo
+
+The public demo runs on Vercel's free tier with `DEMO_MODE=true` (see `app/demo_app.py`). It is built for a serverless function, so it differs from the full service:
+
+| | Full service (`uvicorn main:app`) | Live demo (`DEMO_MODE=true`) |
+|---|---|---|
+| Search | Wikipedia, arXiv, DuckDuckGo | Same, live |
+| Ranking | `all-MiniLM-L6-v2` embeddings (PyTorch) | Hashed bag-of-words embedder: lexical overlap, not meaning. PyTorch (about 5.6 GB) does not fit Vercel's 500 MB function limit |
+| Planner, critic, writer | Groq LLM | **Simulated** when no `GROQ_API_KEY` is set: template sub-questions, a critique that only counts sources, and a report that quotes the top passages. The page and every report say so. Real when a key is set |
+| API | Sessions in SQLite, background tasks, follow-ups, `/sessions` | One stateless call, `GET /api/research?q=...`, that streams every stage and ends with a `REPORT` event. No database and no session list, so visitors cannot see each other's questions |
+| Guards | none (local use) | 12 questions an hour per visitor (per instance), questions up to 200 characters |
+
+**To make the LLM stages real on the demo** (free): create a Groq API key at [console.groq.com](https://console.groq.com) and add it in the Vercel project settings as `GROQ_API_KEY`, then redeploy. The key lives only in Vercel's encrypted environment variables. The page then says "Live" and stops marking stages as simulated.
+
+---
+
 ## Quick Start
 
 ```bash
 git clone https://github.com/Nityaa08/meridian.git
 cd meridian
-pip install -r requirements.txt
+pip install -r requirements-ml.txt     # core + sentence-transformers (PyTorch)
 
 # Get a free Groq API key at https://console.groq.com
 cp .env.example .env
@@ -60,7 +100,15 @@ cp .env.example .env
 uvicorn main:app --reload
 ```
 
-The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Issues](#known-issues-checked-2026-11-02).
+The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Issues](#known-issues-checked-2026-11-13). `requirements.txt` alone installs the core service without PyTorch; the app then falls back to the lexical hashing embedder and logs a warning.
+
+Run the demo version locally, with no key and no PyTorch:
+
+```bash
+pip install -r requirements.txt
+DEMO_MODE=true EMBEDDER_BACKEND=hashing uvicorn main:app --reload
+open http://localhost:8000
+```
 
 ---
 
@@ -189,7 +237,7 @@ curl http://localhost:8000/health
 
 ---
 
-## Known Issues (checked 2026-11-02)
+## Known Issues (checked 2026-11-13)
 
 Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU by default and embeds the query and passages in one call), the Wikipedia 404, the DuckDuckGo `Invalid impersonate` error, the retired default model, silent fallbacks, unchecked citations, the event log, and stale event queues. See the tests below for what was checked and how.
 
@@ -199,8 +247,9 @@ Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU b
 - **Citations are checked against URLs only.** The Synthesizer can only cite retrieved URLs now, but whether a cited passage supports the sentence is not checked.
 - **A finished session's stream is a replay.** Once a session ends, `GET /research/{id}/stream` returns the saved events at once. The live queue of a session nobody streams is dropped 5 minutes after it finishes.
 - **Streaming works across worker processes, with a short delay.** A running session's events are saved to the database as they happen (batched, at most every 0.5 s). If a stream request lands on a worker that isn't running the session, it follows those saved events instead of returning 404. On the worker that runs the session, events arrive instantly; on another worker they arrive up to about half a second later. With several workers on different machines, use a shared database instead of SQLite.
-- **Not deployable on Vercel serverless.** `sentence-transformers` pulls in PyTorch, so the install bundle is about 5.6 GB, above Vercel's 500 MB function limit. Run it locally or in a container on a VM instead.
-- **No authentication or rate limit.** `/sessions` lists every user's queries.
+- **The full service is not deployable on Vercel serverless.** `sentence-transformers` pulls in PyTorch, so the install bundle is about 5.6 GB, above Vercel's 500 MB function limit. The live demo therefore runs the stateless demo app with the lexical hashing embedder (see [The Live Demo](#the-live-demo)); run the full service locally or in a container on a VM.
+- **The demo's ranking and LLM stages are stand-ins.** Without a key, the planner, critic and writer are rules, not a model, and the demo's ranking measures word overlap. The demo shows the pipeline, streaming and citation checks working on live search results; it does not show answer quality.
+- **No authentication or rate limit on the full service.** `/sessions` lists every user's queries. (The demo has neither endpoint and is rate limited.)
 
 ## Tests
 
@@ -209,4 +258,12 @@ pip install -r requirements-dev.txt
 python -m pytest tests -v
 ```
 
-24 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. They cover the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, following a session that runs on another worker, saving progress while a session runs, and follow-ups. They passed on 2026-11-11.
+37 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (24) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, following a session that runs on another worker, saving progress while a session runs, and follow-ups. `tests/test_demo.py` (13) covers the hashing embedder and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits and the rate limit. They passed on 2026-11-13.
+
+## Deployment
+
+Live demo: Vercel (free tier), entrypoint `main.py`, Python 3.12 (`.python-version`), installing `requirements.txt` (no PyTorch). Environment variables: `DEMO_MODE=true`, `EMBEDDER_BACKEND=hashing`, and optionally `GROQ_API_KEY`. Every push to `main` redeploys.
+
+---
+
+Built by [Nityashree S](https://nityashree.in) · [GitHub](https://github.com/Nityaa08)

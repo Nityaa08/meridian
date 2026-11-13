@@ -3,6 +3,7 @@ import json
 import httpx
 from app.agents.base import BaseAgent
 from app.config import settings
+from app.agents import simulated
 
 
 class PlannerAgent(BaseAgent):
@@ -19,29 +20,32 @@ class PlannerAgent(BaseAgent):
         )
         user_prompt = f"Research question: {query}"
 
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{settings.groq_base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                    json={
-                        "model": settings.groq_model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.3,
-                    },
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
-                sub_questions = parsed.get("sub_questions", [query])
-        except Exception as e:
-            self.error = f"{e.__class__.__name__}: {e}"
-            await self.emit(queue, "PLANNING", f"Planner fallback: {e}", {"error": str(e)})
-            sub_questions = [query]
+        if settings.simulate_llm:
+            sub_questions = simulated.plan(query)
+        else:
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        f"{settings.groq_base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                        json={
+                            "model": settings.groq_model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.3,
+                        },
+                    )
+                    resp.raise_for_status()
+                    content = resp.json()["choices"][0]["message"]["content"]
+                    parsed = json.loads(content)
+                    sub_questions = parsed.get("sub_questions", [query])
+            except Exception as e:
+                self.error = f"{e.__class__.__name__}: {e}"
+                await self.emit(queue, "PLANNING", f"Planner fallback: {e}", {"error": str(e)})
+                sub_questions = [query]
 
         if not isinstance(sub_questions, list) or not sub_questions:
             sub_questions = [query]

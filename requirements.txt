@@ -1,8 +1,9 @@
+# Core service. Enough for the tests and the public demo (EMBEDDER_BACKEND=hashing).
+# For the real semantic embedder (all-MiniLM-L6-v2), install requirements-ml.txt instead.
 fastapi
 uvicorn[standard]
 pydantic-settings
 httpx
-sentence-transformers
 sse-starlette
 aiosqlite
 SQLAlchemy[asyncio]

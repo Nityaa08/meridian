@@ -4,6 +4,7 @@ import numpy as np
 import httpx
 from app.agents.base import BaseAgent
 from app.config import settings
+from app.agents import simulated
 
 
 def filter_citations(sections: list, allowed_urls: set[str]) -> tuple[list[dict], int]:
@@ -68,34 +69,37 @@ class SynthesizerAgent(BaseAgent):
             f"Passages:\n{passages_text}"
         )
 
-        try:
-            async with httpx.AsyncClient(timeout=45.0) as client:
-                resp = await client.post(
-                    f"{settings.groq_base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                    json={
-                        "model": settings.groq_model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.4,
-                        # Room for reasoning tokens: gpt-oss models count them here.
-                        "max_tokens": 4096,
-                    },
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                synthesis = json.loads(content)
-        except Exception as e:
-            self.error = f"{e.__class__.__name__}: {e}"
-            await self.emit(queue, "SYNTHESIZING", f"Synthesizer fallback: {e}", {"error": str(e)})
-            synthesis = {
-                "summary": f"Research on: {query}",
-                "key_findings": ["Synthesis failed — raw passages available"],
-                "sections": [],
-            }
+        if settings.simulate_llm:
+            synthesis = simulated.synthesize(query, passages)
+        else:
+            try:
+                async with httpx.AsyncClient(timeout=45.0) as client:
+                    resp = await client.post(
+                        f"{settings.groq_base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                        json={
+                            "model": settings.groq_model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.4,
+                            # Room for reasoning tokens: gpt-oss models count them here.
+                            "max_tokens": 4096,
+                        },
+                    )
+                    resp.raise_for_status()
+                    content = resp.json()["choices"][0]["message"]["content"]
+                    synthesis = json.loads(content)
+            except Exception as e:
+                self.error = f"{e.__class__.__name__}: {e}"
+                await self.emit(queue, "SYNTHESIZING", f"Synthesizer fallback: {e}", {"error": str(e)})
+                synthesis = {
+                    "summary": f"Research on: {query}",
+                    "key_findings": ["Synthesis failed — raw passages available"],
+                    "sections": [],
+                }
 
         confidence = float(np.mean([p.get("similarity", 0.5) for p in passages])) if passages else 0.0
 

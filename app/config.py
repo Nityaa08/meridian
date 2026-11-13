@@ -15,6 +15,17 @@ class Settings(BaseSettings):
     # sentence-transformers pick a device, or e.g. "cuda".
     embedder_device: str = "cpu"
     top_k_passages: int = 10
+    # "sentence-transformers" (needs requirements-ml.txt) or "hashing" (lexical, no model).
+    embedder_backend: str = "sentence-transformers"
+    # Public demo: serve the one-page demo and the stateless /api/research stream
+    # instead of the session API, and simulate the LLM stages when no Groq key is set.
+    demo_mode: bool = False
+    demo_rate_limit_per_hour: int = 12
+    demo_max_query_chars: int = 200
+
+    @property
+    def simulate_llm(self) -> bool:
+        return self.demo_mode and not self.groq_api_key
 
     class Config:
         env_file = ".env"
