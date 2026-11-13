@@ -1,10 +1,10 @@
 # Meridian — Multi-Agent Research Intelligence API
 
-**Live demo: [meridian-research.vercel.app](https://meridian-research.vercel.app)** (real search and ranking; LLM stages simulated unless a key is set) · by [Nityashree S](https://nityashree.in)
+**Live demo: [meridian-nityashree.vercel.app](https://meridian-nityashree.vercel.app)** (real search and ranking; LLM stages simulated unless a key is set) · by [Nityashree S](https://nityashree.in)
 
 > A five-stage research pipeline: an LLM splits your question into sub-questions, the sub-questions are searched concurrently, local embeddings rank the passages, an LLM reviews them for gaps and contradictions, and an LLM writes a structured report — with every stage streamed live over Server-Sent Events.
 
-[![Demo page: the five pipeline stages streaming on the left and the cited report on the right](docs/screenshot.png)](https://meridian-research.vercel.app)
+[![Demo page: the five pipeline stages streaming on the left and the cited report on the right](docs/screenshot.png)](https://meridian-nityashree.vercel.app)
 
 ---
 
