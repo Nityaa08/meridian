@@ -49,6 +49,26 @@ class TestHashingEmbedder:
         assert isinstance(load_embedder("sentence-transformers", "all-MiniLM-L6-v2", "cpu"), HashingEmbedder)
 
 
+    def test_realistic_passage_clears_the_hashing_threshold(self):
+        """A relevant encyclopedia-style intro must pass the extractor's cut for this embedder."""
+        e = HashingEmbedder()
+        intro = (
+            "In deep learning, the transformer is an architecture based on the multi-head attention "
+            "mechanism, in which text is converted to numerical representations called tokens, and each "
+            "token is converted into a vector via lookup from a word embedding table. At each layer, each "
+            "token is then contextualized within the scope of the context window with other tokens via a "
+            "parallel multi-head attention mechanism, allowing the signal for key tokens to be amplified "
+            "and less important tokens to be diminished. Transformers have the advantage of having no "
+            "recurrent units and therefore require less training time than earlier recurrent neural "
+            "architectures such as long short-term memory. Later variations have been widely adopted for "
+            "training large language models on large datasets."
+        )
+        unrelated = ("The Battle of Hastings was fought on 14 October 1066 between the Norman-French army of "
+                     "William, the Duke of Normandy, and an English army under the Anglo-Saxon King Harold.")
+        q, rel, unrel = e.encode(["How does transformer attention work?", intro, unrelated])
+        assert float(q @ rel) >= e.min_similarity > float(q @ unrel)
+
+
 class TestSimulatedStages:
     def test_plan_uses_the_topic(self):
         subs = simulated.plan("How does transformer attention work?")

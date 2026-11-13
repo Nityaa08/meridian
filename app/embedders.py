@@ -28,6 +28,9 @@ class HashingEmbedder:
     """Hashed bag of words and bigrams. encode() matches SentenceTransformer.encode()."""
 
     name = "hashing (lexical, no model)"
+    # A short question against a long passage scores about 0.05-0.2 here when they share
+    # the key terms (MiniLM gives 0.3-0.7), so the extractor uses this lower threshold.
+    min_similarity = 0.05
 
     def __init__(self, dim: int = 2048):
         self.dim = dim

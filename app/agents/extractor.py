@@ -9,6 +9,9 @@ from app.config import settings
 # requests never run the model in two threads at once.
 _ENCODE_LOCK = threading.Lock()
 
+# Default relevance threshold (cosine similarity) for sentence-transformers embeddings.
+MIN_SIMILARITY = 0.15
+
 
 def _encode(embedder, texts: list[str]):
     with _ENCODE_LOCK:
@@ -45,9 +48,11 @@ class ExtractorAgent(BaseAgent):
             reverse=True,
         )
 
-        # Drop passages below minimum similarity threshold — removes junk results
-        MIN_SIMILARITY = 0.15
-        ranked = [p for p in ranked if p["similarity"] >= MIN_SIMILARITY]
+        # Drop passages below minimum similarity threshold — removes junk results.
+        # The threshold depends on the embedder: lexical hashing vectors give much
+        # lower cosines than MiniLM for the same match, so they set their own.
+        min_similarity = getattr(self.embedder, "min_similarity", MIN_SIMILARITY)
+        ranked = [p for p in ranked if p["similarity"] >= min_similarity]
 
         top_k = ranked[:settings.top_k_passages]
 
