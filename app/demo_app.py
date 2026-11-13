@@ -117,6 +117,12 @@ def create_demo_app() -> FastAPI:
         description="Stateless demo of the Meridian research pipeline. See /api/research.",
         version="1.0.0",
     )
+    register_demo_routes(app)
+    return app
+
+
+def register_demo_routes(app: FastAPI) -> None:
+    """Add the demo page, /health and /api/research to an app (used by main.py in DEMO_MODE)."""
     app.state.embedder = None
     app.state.limiter = RateLimiter(settings.demo_rate_limit_per_hour)
 
@@ -182,5 +188,3 @@ def create_demo_app() -> FastAPI:
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-    return app

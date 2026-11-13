@@ -135,3 +135,15 @@ def test_rate_limiter_window_resets():
     assert rl.allow("b")[0]
     t[0] = 11
     assert rl.allow("a")[0]
+
+
+def test_main_exposes_a_top_level_app_in_demo_mode():
+    """Vercel loads `app` from main.py; in DEMO_MODE it must carry the demo routes."""
+    import os
+    import subprocess
+
+    env = {**os.environ, "DEMO_MODE": "true", "EMBEDDER_BACKEND": "hashing"}
+    code = "import main; print(sorted(r.path for r in main.app.routes if r.path.startswith(('/api', '/health'))))"
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True,
+                         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    assert "/api/research" in out.stdout and "/health" in out.stdout

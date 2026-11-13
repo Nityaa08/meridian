@@ -41,23 +41,26 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
+# Vercel looks for a top-level `app = FastAPI(...)` in this file, so the app is
+# always created here; DEMO_MODE only decides which routes it gets.
+app = FastAPI(
+    title="Meridian demo" if settings.demo_mode else "Meridian — Multi-Agent Research Intelligence API",
+    description=(
+        "5 specialized AI agents decompose your query, search Wikipedia + arXiv + DuckDuckGo in parallel, "
+        "rank passages by semantic similarity, detect contradictions, and synthesize a structured report — "
+        "all streamed live via SSE."
+    ),
+    version="1.0.0",
+    # The demo is stateless: no database to create and the embedder loads on first use.
+    lifespan=None if settings.demo_mode else lifespan,
+)
+
 if settings.demo_mode:
     # Public demo: one stateless streaming endpoint, no database (see app/demo_app.py).
-    from app.demo_app import create_demo_app
+    from app.demo_app import register_demo_routes
 
-    app = create_demo_app()
+    register_demo_routes(app)
 else:
-    app = FastAPI(
-        title="Meridian — Multi-Agent Research Intelligence API",
-        description=(
-            "5 specialized AI agents decompose your query, search Wikipedia + arXiv + DuckDuckGo in parallel, "
-            "rank passages by semantic similarity, detect contradictions, and synthesize a structured report — "
-            "all streamed live via SSE."
-        ),
-        version="1.0.0",
-        lifespan=lifespan,
-    )
-
     app.include_router(research_router)
     app.include_router(stream_router)
     app.include_router(sessions_router)
