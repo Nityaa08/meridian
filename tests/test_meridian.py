@@ -314,6 +314,77 @@ class TestApi:
         client.portal.call(add)
         assert _events(client.get(f"/research/{sid}/stream").text)[-1]["type"] == "ERROR"
 
+    def test_two_clients_on_one_live_stream_both_get_every_event(self):
+        """
+        Two subscribers to the same running session (two tabs, or an EventSource that
+        reconnected) must each get the whole event sequence and both must end on DONE.
+        Before the fix they shared one asyncio.Queue: each event went to one of them,
+        and the client that missed DONE waited for events that never came.
+        """
+        from app.api.stream import stream_research
+
+        class FakeRequest:
+            def __init__(self, queues):
+                self.app = types.SimpleNamespace(state=types.SimpleNamespace(event_queues=queues))
+
+            async def is_disconnected(self):
+                return False
+
+        async def collect(response):
+            out = []
+            async for item in response.body_iterator:
+                event = json.loads(item["data"])
+                out.append(event["type"])
+                if event["type"] == "DONE":
+                    return out
+
+        async def scenario():
+            queues = {}
+            q = EventQueue()
+            queues["s"] = q
+            await q.put(AgentEvent(agent="PlannerAgent", type="PLANNING", message="p"))
+            a = asyncio.create_task(collect(await stream_research("s", FakeRequest(queues))))
+            b = asyncio.create_task(collect(await stream_research("s", FakeRequest(queues))))
+            await asyncio.sleep(0.05)
+            for t in ("SEARCHING", "EXTRACTING", "CRITIQUING", "SYNTHESIZING", "DONE"):
+                await q.put(AgentEvent(agent="X", type=t, message=t))
+                await asyncio.sleep(0.01)
+            return await asyncio.wait_for(asyncio.gather(a, b), timeout=3)
+
+        expected = ["PLANNING", "SEARCHING", "EXTRACTING", "CRITIQUING", "SYNTHESIZING", "DONE"]
+        assert run(scenario()) == [expected, expected]
+
+    def test_reconnecting_client_gets_events_the_first_client_already_read(self):
+        """An EventSource that drops and reconnects mid-run starts again from the first event."""
+        from app.api.stream import stream_research
+
+        class FakeRequest:
+            def __init__(self, queues):
+                self.app = types.SimpleNamespace(state=types.SimpleNamespace(event_queues=queues))
+
+            async def is_disconnected(self):
+                return False
+
+        async def scenario():
+            queues = {}
+            q = EventQueue()
+            queues["s"] = q
+            for t in ("PLANNING", "SEARCHING"):
+                await q.put(AgentEvent(agent="X", type=t, message=t))
+            first = (await stream_research("s", FakeRequest(queues))).body_iterator
+            await first.__anext__()
+            await first.__anext__()
+            await first.aclose()  # the client went away after reading two events
+            await q.put(AgentEvent(agent="X", type="DONE", message="done"))
+            second = (await stream_research("s", FakeRequest(queues))).body_iterator
+
+            async def read_all():
+                return [json.loads(item["data"])["type"] async for item in second]
+
+            return await asyncio.wait_for(read_all(), timeout=3)
+
+        assert run(scenario()) == ["PLANNING", "SEARCHING", "DONE"]
+
     def test_health(self, client):
         body = client.get("/health").json()
         assert body["model"] == "openai/gpt-oss-20b"

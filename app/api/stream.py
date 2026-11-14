@@ -1,6 +1,5 @@
 import asyncio
 import json
-from dataclasses import asdict
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 from sse_starlette.sse import EventSourceResponse
@@ -66,7 +65,7 @@ async def stream_research(session_id: str, request: Request):
 
     # No live queue here: either the session finished and its queue was dropped, or it is
     # running on another worker process. Both are served from the event log in the DB.
-    if queue is None or (getattr(queue, "finished", False) and queue.empty()):
+    if queue is None:
         session = await _load(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="No active stream for this session")
@@ -83,20 +82,27 @@ async def stream_research(session_id: str, request: Request):
         return EventSourceResponse(_follow_from_db(session_id, request))
 
     async def event_generator():
+        # Each client reads the queue's history from the start with its own cursor,
+        # so concurrent or reconnecting clients all get the full sequence.
+        seen = 0
         while True:
-            try:
-                if await request.is_disconnected():
-                    break
-                event = await asyncio.wait_for(queue.get(), timeout=60.0)
-                yield {"data": json.dumps(asdict(event))}
-                if event.type in TERMINAL_EVENTS:
+            if await request.is_disconnected():
+                break
+            if seen < len(queue.history):
+                event = queue.history[seen]
+                seen += 1
+                yield {"data": json.dumps(event)}
+                if event.get("type") in TERMINAL_EVENTS:
                     # The live stream has been delivered; later requests replay from the DB.
-                    if queues.get(session_id) is queue and getattr(queue, "finished", True):
+                    if queues.get(session_id) is queue and queue.finished:
                         queues.pop(session_id, None)
                     break
+                continue
+            if queue.finished:
+                break  # the pipeline ended without a DONE/ERROR event
+            try:
+                await queue.wait_for_event(seen, timeout=60.0)
             except asyncio.TimeoutError:
                 yield {"data": json.dumps({"type": "HEARTBEAT", "message": "still running..."})}
-            except Exception:
-                break
 
     return EventSourceResponse(event_generator())

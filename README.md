@@ -153,7 +153,7 @@ curl http://localhost:8000/health
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/research` | Start a new research session |
-| `GET` | `/research/{id}/stream` | SSE stream of live agent events (replays the saved events once the session has finished) |
+| `GET` | `/research/{id}/stream` | SSE stream of live agent events, from the first event; any number of clients can stream the same session (replays the saved events once the session has finished) |
 | `GET` | `/research/{id}` | Get status + final report |
 | `POST` | `/research/{id}/followup` | Ask follow-up (reuses fetched sources) |
 | `GET` | `/sessions` | List all sessions |
@@ -260,7 +260,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -v
 ```
 
-39 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (24) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, following a session that runs on another worker, saving progress while a session runs, and follow-ups. `tests/test_demo.py` (15) covers the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. They passed on 2026-11-13.
+41 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (26) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, two clients streaming one live session and a client that reconnects mid-run (each gets every event and ends on DONE), following a session that runs on another worker, saving progress while a session runs, and follow-ups. `tests/test_demo.py` (15) covers the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. They passed on 2026-11-13.
 
 GitHub Actions (`.github/workflows/tests.yml`) runs the whole suite on Python 3.12 (the version in `.python-version`, which Vercel also uses) on every push to `main` and on pull requests, installing `requirements.txt` + `requirements-dev.txt` only.
 
