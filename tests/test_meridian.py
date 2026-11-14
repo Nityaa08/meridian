@@ -257,6 +257,83 @@ class TestApi:
         report = client.get(f"/research/{sid}").json()
         assert report["report"]["followup_question"] == "What is multi-head attention?"
 
+    def _status_and_error(self, client, sid):
+        from sqlalchemy import select
+        from app.database import AsyncSessionLocal
+        from app.models.session import ResearchSession
+
+        async def load():
+            async with AsyncSessionLocal() as db:
+                res = await db.execute(select(ResearchSession).where(ResearchSession.id == sid))
+                s = res.scalar_one()
+                return s.status, s.error_message
+        return client.portal.call(load)
+
+    def test_followup_marks_session_running_while_it_runs(self, client, monkeypatch):
+        """
+        While a follow-up runs the session must not look finished: otherwise a second
+        follow-up is accepted at the same time, and a stream on another worker replays
+        the half-written event log as if it were done.
+        """
+        from app.api import research as research_mod
+
+        if not (hasattr(client, "portal") and client.portal):
+            pytest.skip("TestClient portal not available")
+        sid = client.post("/research", json={"query": "transformer attention"}).json()["session_id"]
+        seen = {}
+        real = research_mod.run_followup_pipeline
+
+        async def spy(session_id, question, embedder, queue, **kwargs):
+            from sqlalchemy import select
+            from app.database import AsyncSessionLocal
+            from app.models.session import ResearchSession
+            async with AsyncSessionLocal() as db:
+                res = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))
+                seen["status"] = res.scalar_one().status
+            await real(session_id, question, embedder, queue, **kwargs)
+
+        monkeypatch.setattr(research_mod, "run_followup_pipeline", spy)
+        assert client.post(f"/research/{sid}/followup", json={"question": "multi-head?"}).status_code == 200
+        assert seen["status"] == "running"
+        assert client.get(f"/research/{sid}").json()["status"] in ("completed", "degraded")
+
+    def test_second_followup_rejected_while_one_is_running(self, client):
+        import uuid
+        from app.database import AsyncSessionLocal
+        from app.models.session import ResearchSession
+
+        if not (hasattr(client, "portal") and client.portal):
+            pytest.skip("TestClient portal not available")
+        sid = str(uuid.uuid4())
+
+        async def add():
+            async with AsyncSessionLocal() as db:
+                db.add(ResearchSession(id=sid, query="q", status="running",
+                                       sources_raw=[{"title": "t", "url": "u", "text": "x"}]))
+                await db.commit()
+        client.portal.call(add)
+        r = client.post(f"/research/{sid}/followup", json={"question": "again?"})
+        assert r.status_code == 400
+
+    def test_failed_followup_is_recorded_and_keeps_the_earlier_report(self, client, monkeypatch):
+        if not (hasattr(client, "portal") and client.portal):
+            pytest.skip("TestClient portal not available")
+        sid = client.post("/research", json={"query": "transformer attention"}).json()["session_id"]
+        before = client.get(f"/research/{sid}").json()
+
+        async def boom(self, *a, **k):
+            raise RuntimeError("synthesizer exploded")
+
+        monkeypatch.setattr("app.agents.synthesizer.SynthesizerAgent.run", boom)
+        assert client.post(f"/research/{sid}/followup", json={"question": "multi-head?"}).status_code == 200
+
+        status, error = self._status_and_error(client, sid)
+        assert status == "completed"  # back to what it was, so a new follow-up can be asked
+        assert error and "synthesizer exploded" in error
+        after = client.get(f"/research/{sid}").json()
+        assert after["report"] == before["report"]
+        assert _events(client.get(f"/research/{sid}/stream").text)[-1]["type"] == "ERROR"
+
     def test_unknown_stream_404(self, client):
         assert client.get("/research/does-not-exist/stream").status_code == 404
 

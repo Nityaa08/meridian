@@ -102,7 +102,7 @@ cp .env.example .env
 uvicorn main:app --reload
 ```
 
-The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Issues](#known-issues-checked-2026-11-13). `requirements.txt` alone installs the core service without PyTorch; the app then falls back to the lexical hashing embedder and logs a warning.
+The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Limitations](#known-limitations-checked-2026-11-14). `requirements.txt` alone installs the core service without PyTorch; the app then falls back to the lexical hashing embedder and logs a warning.
 
 Run the demo version locally, with no key and no PyTorch:
 
@@ -155,7 +155,7 @@ curl http://localhost:8000/health
 | `POST` | `/research` | Start a new research session |
 | `GET` | `/research/{id}/stream` | SSE stream of live agent events, from the first event; any number of clients can stream the same session (replays the saved events once the session has finished) |
 | `GET` | `/research/{id}` | Get status + final report |
-| `POST` | `/research/{id}/followup` | Ask follow-up (reuses fetched sources) |
+| `POST` | `/research/{id}/followup` | Ask follow-up (reuses fetched sources). The session is `running` until it ends; a second follow-up sent meanwhile gets 400 |
 | `GET` | `/sessions` | List all sessions |
 | `DELETE` | `/research/{id}` | Delete a session |
 | `GET` | `/health` | System health + embedder status |
@@ -167,7 +167,7 @@ curl http://localhost:8000/health
 
 `confidence_score` is the retrieval similarity: the mean cosine similarity of the passages used. It is not a measure of correctness.
 
-`status` is `completed` when every stage worked, `degraded` when a report was produced but something fell back (an LLM call failed, no source returned passages, or the Synthesizer cited a URL that was not retrieved), and `failed` when the pipeline raised an error. `report.warnings` lists what went wrong. Section `sources` only contain URLs of retrieved passages; any other URL the LLM writes is removed and counted in `warnings`.
+`status` is `completed` when every stage worked, `degraded` when a report was produced but something fell back (an LLM call failed, no source returned passages, or the Synthesizer cited a URL that was not retrieved), and `failed` when the pipeline raised an error. While a follow-up runs the status is `running`; if the follow-up fails, the earlier report is kept, the status goes back to what it was, `error_message` says what failed and the stream ends with `ERROR`. `report.warnings` lists what went wrong. Section `sources` only contain URLs of retrieved passages; any other URL the LLM writes is removed and counted in `warnings`.
 
 ```json
 {
@@ -239,7 +239,9 @@ curl http://localhost:8000/health
 
 ---
 
-## Known Issues (checked 2026-11-13)
+## Known Limitations (checked 2026-11-14)
+
+Fixed on 2026-11-14: a live stream shared by two clients (or a reconnecting EventSource) split the events between them and one never got DONE; follow-ups left the session looking finished while they ran, so two could run at once, and a failed follow-up was not recorded. Both have tests.
 
 Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU by default and embeds the query and passages in one call), the Wikipedia 404, the DuckDuckGo `Invalid impersonate` error, the retired default model, silent fallbacks, unchecked citations, the event log, and stale event queues. See the tests below for what was checked and how.
 
@@ -251,7 +253,10 @@ Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU b
 - **Streaming works across worker processes, with a short delay.** A running session's events are saved to the database as they happen (batched, at most every 0.5 s). If a stream request lands on a worker that isn't running the session, it follows those saved events instead of returning 404. On the worker that runs the session, events arrive instantly; on another worker they arrive up to about half a second later. With several workers on different machines, use a shared database instead of SQLite.
 - **The full service is not deployable on Vercel serverless.** `sentence-transformers` pulls in PyTorch, so the install bundle is about 5.6 GB, above Vercel's 500 MB function limit. The live demo therefore runs the stateless demo app with the lexical hashing embedder (see [The Live Demo](#the-live-demo)); run the full service locally or in a container on a VM.
 - **The demo's ranking and LLM stages are stand-ins.** Without a key, the planner, critic and writer are rules, not a model, and the demo's ranking measures word overlap. The demo shows the pipeline, streaming and citation checks working on live search results; it does not show answer quality.
-- **No authentication or rate limit on the full service.** `/sessions` lists every user's queries. (The demo has neither endpoint and is rate limited.)
+- **No authentication or rate limit on the full service.** `/sessions` lists every user's queries, and `/research` has no length limit on the question. (The demo has neither endpoint, caps questions at 200 characters and is rate limited.)
+- **Background work dies with the process.** Sessions run as FastAPI background tasks, not in a job queue. If the server restarts mid-run the session stays `running` in the database and is never resumed; a stream following it from another worker gives up after 30 minutes.
+- **A follow-up replaces the session's report and event log.** Only the latest answer is kept; there is no history of earlier follow-ups.
+- **No overall time limit per session.** Each HTTP call has its own timeout (15 s each for Wikipedia and arXiv, the `ddgs` library default for DuckDuckGo, 30 s for the planner and critic, 45 s for the synthesizer), so a slow run is bounded but can take a few minutes; there is no single deadline or cancel endpoint.
 
 ## Tests
 
@@ -260,7 +265,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -v
 ```
 
-41 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (26) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, two clients streaming one live session and a client that reconnects mid-run (each gets every event and ends on DONE), following a session that runs on another worker, saving progress while a session runs, and follow-ups. `tests/test_demo.py` (15) covers the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. They passed on 2026-11-13.
+44 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (29) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, two clients streaming one live session and a client that reconnects mid-run (each gets every event and ends on DONE), following a session that runs on another worker, saving progress while a session runs, and follow-ups (the session is `running` while one runs, a second is refused, and a failed one is recorded without losing the earlier report). `tests/test_demo.py` (15) covers the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. They passed on 2026-11-14.
 
 GitHub Actions (`.github/workflows/tests.yml`) runs the whole suite on Python 3.12 (the version in `.python-version`, which Vercel also uses) on every push to `main` and on pull requests, installing `requirements.txt` + `requirements-dev.txt` only.
 

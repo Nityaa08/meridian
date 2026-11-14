@@ -32,10 +32,10 @@ def _progress_saver(session_id: str):
     return save
 
 
-async def _run_then_release(pipeline, queues: dict, session_id: str, queue, *args):
+async def _run_then_release(pipeline, queues: dict, session_id: str, queue, *args, **kwargs):
     """Run a pipeline, then mark its event queue finished so it can be dropped."""
     try:
-        await pipeline(session_id, *args, queue)
+        await pipeline(session_id, *args, queue, **kwargs)
     finally:
         release_queue(queues, session_id, queue)
 
@@ -103,10 +103,21 @@ async def followup_research(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.status not in FINISHED_STATUSES:
-        raise HTTPException(status_code=400, detail="Session must be completed before follow-up")
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    # Claim the session: finished -> running in one UPDATE, so two follow-ups sent at
+    # the same time cannot both start, and stream clients see the session as running.
+    previous_status = session.status
+    async with AsyncSessionLocal() as db:
+        claimed = await db.execute(
+            update(ResearchSession)
+            .where(ResearchSession.id == session_id, ResearchSession.status.in_(FINISHED_STATUSES))
+            .values(status="running", error_message=None)
+        )
+        await db.commit()
+    if claimed.rowcount != 1:
+        raise HTTPException(status_code=400, detail="Session must be completed before follow-up")
 
     queues = request.app.state.event_queues
     queue = EventQueue(on_change=_progress_saver(session_id))
@@ -114,7 +125,8 @@ async def followup_research(
 
     embedder = request.app.state.embedder
     background_tasks.add_task(
-        _run_then_release, run_followup_pipeline, queues, session_id, queue, req.question.strip(), embedder
+        _run_then_release, run_followup_pipeline, queues, session_id, queue, req.question.strip(), embedder,
+        previous_status=previous_status,
     )
 
     return {

@@ -178,28 +178,48 @@ async def run_pipeline(
                 await db.commit()
 
 
+async def _end_followup_with_error(session_id: str, queue, message: str, previous_status: str) -> None:
+    """
+    A follow-up failed: send ERROR, keep the earlier report, record the error and put
+    the session back to the status it had, so it can be read and followed up again.
+    """
+    error_event = AgentEvent(agent="Orchestrator", type="ERROR", message=message)
+    await queue.put(error_event)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))
+        session = result.scalar_one_or_none()
+        if session:
+            session.status = previous_status
+            session.error_message = f"Follow-up failed: {message}"
+            session.agent_events = _history(queue) or [asdict(error_event)]
+            await db.commit()
+
+
 async def run_followup_pipeline(
     session_id: str,
     followup_question: str,
     embedder,
     queue: asyncio.Queue,
+    previous_status: str = STATUS_COMPLETED,
 ):
+    """
+    Answers a follow-up from the session's saved passages. The API marks the session
+    "running" before this starts; this sets the final status (or restores
+    previous_status if the follow-up fails).
+    """
     start_time = time.time()
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))
         session = result.scalar_one_or_none()
-        if not session or not session.sources_raw:
-            error_event = AgentEvent(
-                agent="Orchestrator",
-                type="ERROR",
-                message="Session not found or no sources available for follow-up",
-            )
-            await queue.put(error_event)
-            return
+        query = session.query if session else ""
+        all_passages = (session.sources_raw or []) if session else []
 
-        query = session.query
-        all_passages = session.sources_raw or []
+    if not all_passages:
+        await _end_followup_with_error(
+            session_id, queue, "Session not found or no sources available for follow-up", previous_status
+        )
+        return
 
     try:
         extractor = ExtractorAgent(embedder)
@@ -213,7 +233,7 @@ async def run_followup_pipeline(
             query, top_passages, critique, queue, followup_context=followup_question
         )
     except Exception as e:
-        await queue.put(AgentEvent(agent="Orchestrator", type="ERROR", message=str(e)))
+        await _end_followup_with_error(session_id, queue, str(e), previous_status)
         return
 
     warnings = collect_warnings(
