@@ -91,6 +91,26 @@ code{font-family:var(--mono);font-size:.84em}
 sup.cite{font-size:.68em;line-height:0;vertical-align:.55em;margin-left:1px;font-family:var(--sans);font-weight:600}
 sup.cite a{text-decoration:none;padding:0 1px}
 sup.cite a:hover{text-decoration:underline}
+
+/* ── At a glance (project summary) ─────────────────────── */
+.glance{margin-top:26px;border:1px solid var(--rule-2);background:var(--leaf);padding:18px 22px 16px;position:relative}
+.glance h2{position:absolute;top:-12px;left:18px;background:var(--paper);padding:0 8px;font-size:15px;font-weight:600;color:var(--accent);font-variant-caps:all-small-caps;letter-spacing:.1em}
+.glance dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px}
+.glance dt{font-variant-caps:all-small-caps;letter-spacing:.08em;color:var(--red);font-weight:600;font-size:16px}
+.glance dd{font-size:15px;line-height:1.5;color:var(--ink-2);margin-top:2px}
+.glance dd b{color:var(--ink);font-weight:600}
+.glance .steps{margin-top:14px;padding-top:12px;border-top:1px dashed var(--rule-2);font-size:15px;color:var(--ink-2);font-style:italic}
+.glance .steps b{font-style:normal;font-family:var(--mono);font-size:12px;color:var(--paper);background:var(--accent);border-radius:50%;display:inline-grid;place-items:center;width:18px;height:18px;margin:0 4px 0 10px;vertical-align:1px}
+.glance .steps b:first-child{margin-left:0}
+/* ── Grounding (fact check) ── */
+.facts{margin-top:34px;padding:16px 20px;background:var(--accent-wash);border-left:2px solid var(--accent)}
+.facts h3{margin:0 0 6px;font-size:18px;color:var(--accent);font-variant-caps:all-small-caps;letter-spacing:.1em;font-weight:600}
+.facts p{color:var(--ink-2);font-size:16px}
+.facts .score{font-family:var(--mono);font-size:15px;color:var(--ink);font-weight:600}
+.facts li{margin:6px 0 6px 20px;color:var(--ink);font-size:15.5px}
+.facts li small{font-family:var(--mono);color:var(--muted);font-size:12px}
+@media (max-width:900px){.glance dl{grid-template-columns:1fr 1fr}}
+@media (max-width:560px){.glance{padding:18px 16px 14px}.glance dl{grid-template-columns:1fr;gap:12px}}
 .critic{margin-top:34px;padding:16px 20px;background:var(--red-wash);border-left:2px solid var(--red)}
 .critic h3{margin:0 0 6px;font-size:18px;color:var(--red);font-variant-caps:all-small-caps;letter-spacing:.1em;font-weight:600}
 .critic li{margin:4px 0 4px 20px;color:var(--ink)}
@@ -223,6 +243,17 @@ footer i{color:var(--ink-2)}
 </header>
 
 <main class="wrap">
+  <section class="glance" aria-labelledby="glance-h">
+    <h2 id="glance-h">This project at a glance</h2>
+    <dl>
+      <div><dt>The problem</dt><dd>One search and one chunk rarely answer a real question, and an LLM answer rarely shows where it came from.</dd></div>
+      <div><dt>What I built</dt><dd>A <b>five-agent research API</b>: plan sub-questions, search Wikipedia and arXiv concurrently, rank passages with embeddings, critique, write a cited report. Every stage streams live over SSE.</dd></div>
+      <div><dt>Evidence</dt><dd>Every report gets a <b>grounding check</b>: each sentence is matched against the passages it cites, and unsupported ones are listed. <b>53 tests</b>, CI on every push.</dd></div>
+      <div><dt>Methods</dt><dd>Python, FastAPI, asyncio fan-out, Server-Sent Events, embeddings, SQLite sessions, Groq (optional).</dd></div>
+    </dl>
+    <p class="steps"><b>1</b>Press Research. <b>2</b>Watch the lab notebook fill in, stage by stage. <b>3</b>Read the fact check under the report.</p>
+  </section>
+
   <section class="front" aria-label="Ask a question">
     <aside class="note" id="mode" role="note">
       <p><b>Editor’s note.</b> <span id="mode-text">Search and ranking are real: live Wikipedia and arXiv results. The planner, critic and writer are simulated, because this public demo has no LLM key: sub-questions come from templates, the critique only counts sources, and the report quotes the top passages instead of summarising them.</span></p>
@@ -426,7 +457,7 @@ data: {"agent": "Orchestrator", "type": "REPORT", "data": {"status": "completed"
     const ok = res.status === "completed";
     let h = `<div class="kicker sc">Report <span class="badge ${ok ? "ok" : "bad"}">${esc(res.status)}</span></div>`;
     h += `<h2 class="r-title">${esc(r.query || $("q").value)}</h2>`;
-    h += `<p class="byline">${[`Compiled from ${m.sources_used} of ${m.sources_searched} retrieved passages`, `${m.sub_questions.length} lines of inquiry`, `retrieval similarity ${r.confidence_score.toFixed(2)}`, `${(m.total_time_ms / 1000).toFixed(1)} s`].join('<span class="dot">·</span>')}</p>`;
+    h += `<p class="byline">${[`Compiled from ${m.sources_used} of ${m.sources_searched} retrieved passages`, `${m.sub_questions.length} lines of inquiry`, `retrieval similarity ${r.confidence_score.toFixed(2)}`, ...(r.grounding && r.grounding.sentences_checked ? [`${r.grounding.supported}/${r.grounding.sentences_checked} sentences grounded`] : []), `${(m.total_time_ms / 1000).toFixed(1)} s`].join('<span class="dot">·</span>')}</p>`;
     if (m.sub_questions && m.sub_questions.length) h += `<p class="inquiry">Sub-questions: ${m.sub_questions.map(q => `<i>${esc(q)}</i>`).join("; ")}.</p>`;
     h += `<div class="abstract"><p><span class="lbl">Abstract.</span>${esc(r.summary)}${r.simulated_llm && sources.length ? cite([1]) : ""}</p>`;
     if (r.simulated_llm) h += `<p class="fnote">Simulated writer: the abstract and findings are quoted from the top-ranked passages, not written by a model.</p>`;
@@ -442,6 +473,13 @@ data: {"agent": "Orchestrator", "type": "REPORT", "data": {"status": "completed"
     h += gaps.length ? `<ul>${gaps.map(g => `<li>${esc(g)}</li>`).join("")}</ul>` : `<p>No gaps flagged.</p>`;
     if (r.simulated_llm) h += `<p>Simulated critic: it counts sources and similarity only; contradictions are not checked without an LLM.</p>`;
     h += `</section>`;
+    const g = r.grounding;
+    if (g && g.sentences_checked) {
+      h += `<section class="facts" aria-label="Fact check"><h3>Fact check</h3>`;
+      h += `<p><span class="score">${g.supported} of ${g.sentences_checked}</span> sentences are found in the passages they cite (at least ${Math.round(g.threshold * 100)}% of their content words in one passage).</p>`;
+      if (g.unsupported.length) h += `<p>Not found in their sources:</p><ul>${g.unsupported.map(u => `<li>${esc(u.sentence)} <small>${esc(u.where)} · ${Math.round(u.support * 100)}%</small></li>`).join("")}</ul>`;
+      h += `<p>${r.simulated_llm ? "The simulated writer quotes its passages, so this is 100% by construction; with an LLM writer it catches invented content." : "A word-overlap check: it catches invented names, numbers and claims, not a reworded misreading."}</p></section>`;
+    }
     if (r.warnings && r.warnings.length) h += `<section class="critic" aria-label="Warnings"><h3>Warnings</h3><ul>${r.warnings.map(g => `<li>${esc(g)}</li>`).join("")}</ul></section>`;
     if (sources.length) {
       const max = Math.max(...sources.map(s => s.relevance_score), 0.01);

@@ -16,7 +16,7 @@ Needs Python 3.12 and `make`. Each command creates `.venv` on first use.
 git clone https://github.com/Nityaa08/meridian.git && cd meridian
 
 make demo                         # demo page at http://localhost:8000, no API keys needed
-make test                         # 44 tests, no network or keys
+make test                         # 53 tests, no network or keys
 GROQ_API_KEY=your_key make dev    # full mode: session API with real LLM stages (free key: console.groq.com)
 ```
 
@@ -24,9 +24,18 @@ In `make demo`, search and ranking are real (live Wikipedia and arXiv); the plan
 
 ---
 
+## In 60 seconds
+
+| | |
+|---|---|
+| **Problem** | One search and one chunk rarely answer a real question, and an LLM answer rarely shows where it came from. |
+| **What I built** | A five-agent research API: plan sub-questions, search Wikipedia and arXiv concurrently, rank passages with embeddings, critique, and write a cited report. Every stage streams live over Server-Sent Events. |
+| **Evidence** | Every report carries a [grounding check](#grounding-check): each sentence is matched against the passages it cites, and the ones not found are listed. Citations to URLs that were not retrieved are removed. 53 tests with fake services, CI on every push. |
+| **Engineering** | Python, FastAPI, asyncio fan-out, SSE that survives reconnects and multiple workers, embeddings (local or hashing), SQLite sessions, optional Groq LLM. |
+
 ## The Problem
 
-A basic retrieval system fires one query and returns one chunk. Meridian tries a broader approach: it splits the question, searches each part, ranks the evidence, asks an LLM to note gaps and contradictions, and shows each step as it happens. It has not been evaluated for answer quality yet.
+A basic retrieval system fires one query and returns one chunk. Meridian tries a broader approach: it splits the question, searches each part, ranks the evidence, asks an LLM to note gaps and contradictions, and shows each step as it happens. Each report is checked for grounding (below), but answer quality has not been evaluated against a labelled set yet.
 
 ---
 
@@ -200,7 +209,8 @@ curl http://localhost:8000/health
     ],
     "confidence_score": 0.87,
     "gaps_identified": ["aspect not covered by available sources"],
-    "contradictions": []
+    "contradictions": [],
+    "grounding": {"sentences_checked": 9, "supported": 8, "score": 0.8889, "threshold": 0.6, "unsupported": ["..."]}
   },
   "metadata": {
     "agents_used": 5,
@@ -212,6 +222,27 @@ curl http://localhost:8000/health
 ```
 
 ---
+
+## Grounding check
+
+After the Synthesizer writes a report, [`app/pipeline/grounding.py`](app/pipeline/grounding.py) checks every sentence of the summary, key findings and sections against the passages it may cite: a section against its own `sources`, the summary and findings against the passages the writer was given (their first 500 characters, which is what the writer sees). A sentence counts as supported when at least 60% of its content words (4+ letters, not stop words) appear in one of those passages. The result is `report.grounding`:
+
+```json
+"grounding": {
+  "sentences_checked": 9, "supported": 8, "score": 0.8889, "threshold": 0.6,
+  "unsupported": [{"where": "key finding", "sentence": "...", "support": 0.2}],
+  "method": "lexical: share of a sentence's content words found in a cited passage"
+}
+```
+
+The demo page shows it under each report as a fact check, with the sentences that were not found.
+
+What it can and can't tell you:
+
+- **It catches invented content**: names, numbers and claims whose words are not in the cited passages, and a section whose text comes from a source it does not cite.
+- **It does not catch a misreading** that reuses the source's words to say something different. That needs an LLM judge or human labels.
+- **In the public demo it is 100% by construction**, because the simulated writer quotes its passages. With a real LLM writer (`GROQ_API_KEY` set) it is a real signal.
+- When nothing was retrieved, the report is a "no sources found" note and the check is skipped (`score: null`) rather than scored 0.
 
 ## Agent Descriptions
 
@@ -279,7 +310,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -v
 ```
 
-44 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (29) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, two clients streaming one live session and a client that reconnects mid-run (each gets every event and ends on DONE), following a session that runs on another worker, saving progress while a session runs, and follow-ups (the session is `running` while one runs, a second is refused, and a failed one is recorded without losing the earlier report). `tests/test_demo.py` (15) covers the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. They passed on 2026-11-14.
+53 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (29) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, two clients streaming one live session and a client that reconnects mid-run (each gets every event and ends on DONE), following a session that runs on another worker, saving progress while a session runs, and follow-ups (the session is `running` while one runs, a second is refused, and a failed one is recorded without losing the earlier report). `tests/test_grounding.py` (8) covers the grounding check: a quoted sentence is supported and an invented one is not, a section must be backed by its own sources, an invented finding is listed with its support, only the part of a passage the writer saw counts, and no passages means no score. `tests/test_demo.py` (16) covers the project summary and fact check on the page, the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. They passed on 2026-11-14.
 
 GitHub Actions (`.github/workflows/tests.yml`) runs the whole suite on Python 3.12 (the version in `.python-version`, which Vercel also uses) on every push to `main` and on pull requests, installing `requirements.txt` + `requirements-dev.txt` only.
 

@@ -98,6 +98,11 @@ class TestDemoApp:
         r = demo.get("/")
         assert r.status_code == 200 and "Meridian" in r.text and "/api/research" in r.text
 
+    def test_home_explains_the_project_and_shows_the_fact_check(self, demo):
+        page = demo.get("/").text
+        assert "This project at a glance" in page
+        assert "r.grounding" in page and "Fact check" in page
+
     def test_health_says_llm_is_simulated(self, demo):
         h = demo.get("/health").json()
         assert h["mode"] == "demo" and h["llm"].startswith("simulated")
@@ -121,6 +126,9 @@ class TestDemoApp:
         # No LLM call was made: only Wikipedia and arXiv were contacted.
         assert {req.url.host for req in services.requests} <= {"en.wikipedia.org", "export.arxiv.org"}
         assert len(result["metadata"]["sub_questions"]) == 4
+        # The simulated writer quotes its passages, so every sentence is grounded.
+        g = report["grounding"]
+        assert g["sentences_checked"] > 0 and g["score"] == 1.0
 
     def test_with_a_key_the_llm_stages_are_real(self, services, monkeypatch):
         monkeypatch.setattr(settings, "demo_mode", True)
@@ -130,6 +138,8 @@ class TestDemoApp:
         evs = events(client.get("/api/research", params={"q": "attention"}).text)
         assert evs[0]["data"]["simulated_llm"] is False
         assert evs[-1]["data"]["report"]["summary"] == "Attention weights inputs by relevance."
+        # The faked LLM's answer is checked against the passages too.
+        assert evs[-1]["data"]["report"]["grounding"]["sentences_checked"] >= 1
         assert any(req.url.host == "api.groq.com" for req in services.requests)
 
     def test_empty_and_too_long_questions_are_rejected(self, demo):
