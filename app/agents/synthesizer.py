@@ -5,6 +5,7 @@ import httpx
 from app.agents.base import BaseAgent
 from app.config import settings
 from app.agents import simulated
+from app.pipeline.grounding import check_report
 
 
 def filter_citations(sections: list, allowed_urls: set[str]) -> tuple[list[dict], int]:
@@ -117,11 +118,14 @@ class SynthesizerAgent(BaseAgent):
             "gaps_identified": gaps,
             "contradictions": contradictions,
         }
+        # Checked against the same passages the writer was given.
+        report["grounding"] = check_report(report, passages[:10])
 
         await self.emit(
             queue, "SYNTHESIZING",
             f"Report complete. Confidence: {confidence:.2f}. "
-            f"{len(synthesis.get('key_findings', []))} key findings.",
+            f"{len(synthesis.get('key_findings', []))} key findings. "
+            f"Grounding: {report['grounding']['supported']}/{report['grounding']['sentences_checked']} sentences supported by their sources.",
             {"confidence_score": round(confidence, 4)},
         )
         return report
