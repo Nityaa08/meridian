@@ -6,7 +6,21 @@
 
 > A five-stage research pipeline: an LLM splits your question into sub-questions, the sub-questions are searched concurrently, local embeddings rank the passages, an LLM reviews them for gaps and contradictions, and an LLM writes a structured report — with every stage streamed live over Server-Sent Events.
 
-[![Demo page: the five pipeline stages streaming on the left and the cited report on the right](docs/screenshot.png)](https://meridian-nityashree.vercel.app)
+[![Demo page, set like a research journal: the question as the title line, a cited report with numbered sources, and a lab notebook in the margin logging each pipeline stage with timestamps](docs/screenshot.png)](https://meridian-nityashree.vercel.app)
+
+## Run it in 1 minute
+
+Needs Python 3.12 and `make`. Each command creates `.venv` on first use.
+
+```bash
+git clone https://github.com/Nityaa08/meridian.git && cd meridian
+
+make demo                         # demo page at http://localhost:8000, no API keys needed
+make test                         # 44 tests, no network or keys
+GROQ_API_KEY=your_key make dev    # full mode: session API with real LLM stages (free key: console.groq.com)
+```
+
+In `make demo`, search and ranking are real (live Wikipedia and arXiv); the planner, critic and writer are simulated and marked as such on the page. Put a key in the environment or `.env` and the same page runs those stages on the LLM. `make dev` uses the lexical embedder unless you run `make ml` first (installs PyTorch, ~5.6 GB). Without `make`, see [Quick Start](#quick-start).
 
 ---
 
@@ -83,7 +97,7 @@ The public demo runs on Vercel's free tier with `DEMO_MODE=true` (see `app/demo_
 | API | Sessions in SQLite, background tasks, follow-ups, `/sessions` | One stateless call, `GET /api/research?q=...`, that streams every stage and ends with a `REPORT` event. No database and no session list, so visitors cannot see each other's questions |
 | Guards | none (local use) | 12 questions an hour per visitor (per instance), questions up to 200 characters |
 
-**To make the LLM stages real on the demo** (free): create a Groq API key at [console.groq.com](https://console.groq.com) and add it in the Vercel project settings as `GROQ_API_KEY`, then redeploy. The key lives only in Vercel's encrypted environment variables. The page then says "Live" and stops marking stages as simulated.
+**To make the LLM stages real on the demo** (free): create a Groq API key at [console.groq.com](https://console.groq.com) and add it in the Vercel project settings as `GROQ_API_KEY`, then redeploy. The key lives only in Vercel's encrypted environment variables. The page's editor's note then reads "Live edition" and the lab notebook stops marking stages as simulated.
 
 ---
 
