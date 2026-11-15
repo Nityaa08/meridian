@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     embedder_backend: str = "sentence-transformers"
     # Public demo: serve the one-page demo and the stateless /api/research stream
     # instead of the session API, and simulate the LLM stages when no Groq key is set.
+    # Full service guards. API_KEY unset = open (local development). When set, starting
+    # research, follow-ups, deleting and /sessions need it; reading one session or its
+    # stream needs only its unguessable session ID, so browsers' EventSource still works.
+    api_key: str = ""
+    max_query_chars: int = 1000
+    research_rate_limit_per_hour: int = 30  # per client IP, per process; 0 turns it off
     demo_mode: bool = False
     demo_rate_limit_per_hour: int = 12
     demo_max_query_chars: int = 200

@@ -1,5 +1,5 @@
 import uuid
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends
 from pydantic import BaseModel
 from sqlalchemy import select, update
 
@@ -7,6 +7,7 @@ from app.database import AsyncSessionLocal
 from app.models.session import ResearchSession
 from app.pipeline.orchestrator import run_pipeline, run_followup_pipeline, FINISHED_STATUSES
 from app.pipeline.events import EventQueue, release_queue
+from app.limits import check_length, limit_research, require_api_key
 
 router = APIRouter()
 
@@ -40,10 +41,10 @@ async def _run_then_release(pipeline, queues: dict, session_id: str, queue, *arg
         release_queue(queues, session_id, queue)
 
 
-@router.post("/research")
+@router.post("/research", dependencies=[Depends(require_api_key)])
 async def start_research(req: ResearchRequest, request: Request, background_tasks: BackgroundTasks):
-    if not req.query.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    query = check_length(req.query, "Query")
+    await limit_research(request)
 
     session_id = str(uuid.uuid4())
     queues = request.app.state.event_queues
@@ -51,13 +52,13 @@ async def start_research(req: ResearchRequest, request: Request, background_task
     queues[session_id] = queue
 
     async with AsyncSessionLocal() as db:
-        session = ResearchSession(id=session_id, query=req.query.strip(), status="pending")
+        session = ResearchSession(id=session_id, query=query, status="pending")
         db.add(session)
         await db.commit()
 
     embedder = request.app.state.embedder
     background_tasks.add_task(
-        _run_then_release, run_pipeline, queues, session_id, queue, req.query.strip(), embedder
+        _run_then_release, run_pipeline, queues, session_id, queue, query, embedder
     )
 
     return {"session_id": session_id, "status": "running", "stream_url": f"/research/{session_id}/stream"}
@@ -90,7 +91,7 @@ async def get_research(session_id: str):
     }
 
 
-@router.post("/research/{session_id}/followup")
+@router.post("/research/{session_id}/followup", dependencies=[Depends(require_api_key)])
 async def followup_research(
     session_id: str,
     req: FollowUpRequest,
@@ -103,8 +104,8 @@ async def followup_research(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if not req.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    question = check_length(req.question, "Question")
+    await limit_research(request)
 
     # Claim the session: finished -> running in one UPDATE, so two follow-ups sent at
     # the same time cannot both start, and stream clients see the session as running.
@@ -125,7 +126,7 @@ async def followup_research(
 
     embedder = request.app.state.embedder
     background_tasks.add_task(
-        _run_then_release, run_followup_pipeline, queues, session_id, queue, req.question.strip(), embedder,
+        _run_then_release, run_followup_pipeline, queues, session_id, queue, question, embedder,
         previous_status=previous_status,
     )
 
@@ -136,7 +137,7 @@ async def followup_research(
     }
 
 
-@router.delete("/research/{session_id}")
+@router.delete("/research/{session_id}", dependencies=[Depends(require_api_key)])
 async def delete_research(session_id: str, request: Request):
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))

@@ -30,37 +30,10 @@ from app.agents.simulated import SIMULATED_NOTE
 from app.agents.synthesizer import SynthesizerAgent
 from app.config import settings
 from app.embedders import load_embedder
+from app.limits import RateLimiter, client_ip  # noqa: F401  (RateLimiter re-exported for tests)
 from app.pipeline.orchestrator import STATUS_COMPLETED, STATUS_DEGRADED, collect_warnings
 
 _STATIC = os.path.join(os.path.dirname(__file__), "static")
-
-
-class RateLimiter:
-    """Fixed one-hour window per key, in memory (so per serverless instance)."""
-
-    def __init__(self, limit: int, window_s: float = 3600.0, clock=time.monotonic):
-        self.limit, self.window_s, self.clock = limit, window_s, clock
-        self.hits: dict[str, tuple[int, float]] = {}
-
-    def allow(self, key: str) -> tuple[bool, int]:
-        now = self.clock()
-        count, reset_at = self.hits.get(key, (0, now + self.window_s))
-        if reset_at <= now:
-            count, reset_at = 0, now + self.window_s
-        if len(self.hits) > 10_000:
-            self.hits = {k: v for k, v in self.hits.items() if v[1] > now}
-        if count >= self.limit:
-            return False, int(reset_at - now)
-        self.hits[key] = (count + 1, reset_at)
-        return True, 0
-
-
-def client_ip(request: Request) -> str:
-    # Vercel sets these itself; elsewhere fall back to the socket address.
-    real = request.headers.get("x-real-ip")
-    if real and os.environ.get("VERCEL"):
-        return real
-    return request.client.host if request.client else "unknown"
 
 
 def dedupe(passages: list[dict]) -> list[dict]:

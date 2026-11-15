@@ -1,13 +1,15 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from app.database import AsyncSessionLocal
 from app.models.session import ResearchSession
+from app.limits import require_api_key
 
 router = APIRouter()
 
 
-@router.get("/sessions")
+# Lists every caller's questions, so it needs the API key when one is set.
+@router.get("/sessions", dependencies=[Depends(require_api_key)])
 async def list_sessions():
     async with AsyncSessionLocal() as db:
         result = await db.execute(

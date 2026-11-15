@@ -16,7 +16,7 @@ Needs Python 3.12 and `make`. Each command creates `.venv` on first use.
 git clone https://github.com/Nityaa08/meridian.git && cd meridian
 
 make demo                         # demo page at http://localhost:8000, no API keys needed
-make test                         # 53 tests, no network or keys
+make test                         # 67 tests, no network or keys
 GROQ_API_KEY=your_key make dev    # full mode: session API with real LLM stages (free key: console.groq.com)
 ```
 
@@ -30,7 +30,7 @@ In `make demo`, search and ranking are real (live Wikipedia and arXiv); the plan
 |---|---|
 | **Problem** | One search and one chunk rarely answer a real question, and an LLM answer rarely shows where it came from. |
 | **What I built** | A five-agent research API: plan sub-questions, search Wikipedia and arXiv concurrently, rank passages with embeddings, critique, and write a cited report. Every stage streams live over Server-Sent Events. |
-| **Evidence** | Every report carries a [grounding check](#grounding-check): each sentence is matched against the passages it cites, and the ones not found are listed. Citations to URLs that were not retrieved are removed. 53 tests with fake services, CI on every push. |
+| **Evidence** | Every report carries a [grounding check](#grounding-check): each sentence is matched against the passages it cites, and the ones not found are listed. Citations to URLs that were not retrieved are removed. 67 tests with fake services, CI on every push. |
 | **Engineering** | Python, FastAPI, asyncio fan-out, SSE that survives reconnects and multiple workers, embeddings (local or hashing), SQLite sessions, optional Groq LLM. |
 
 ## The Problem
@@ -125,7 +125,9 @@ cp .env.example .env
 uvicorn main:app --reload
 ```
 
-The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Limitations](#known-limitations-checked-2026-11-14). `requirements.txt` alone installs the core service without PyTorch; the app then falls back to the lexical hashing embedder and logs a warning.
+**Before exposing the full service beyond your own machine**, set `API_KEY` in `.env`. Starting research, follow-ups, deleting a session and `GET /sessions` then need `Authorization: Bearer <key>` (or `X-API-Key: <key>`), and get 401 without it. Reading one session (`GET /research/{id}`) and its stream need only the session ID, a random UUID that only the caller who started it receives, because a browser's `EventSource` cannot send headers. Questions and follow-ups are capped at `MAX_QUERY_CHARS` (default 1,000; longer ones get 400), and each client IP can start `RESEARCH_RATE_LIMIT_PER_HOUR` research runs or follow-ups an hour (default 30, `0` turns it off; more get 429 with `Retry-After`). Requests rejected for length or a missing key don't count toward the limit.
+
+The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Limitations](#known-limitations-checked-2026-11-15). `requirements.txt` alone installs the core service without PyTorch; the app then falls back to the lexical hashing embedder and logs a warning.
 
 Run the demo version locally, with no key and no PyTorch:
 
@@ -175,12 +177,12 @@ curl http://localhost:8000/health
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/research` | Start a new research session |
+| `POST` | `/research` | Start a new research session (API key if `API_KEY` is set; length cap and per-IP hourly limit) |
 | `GET` | `/research/{id}/stream` | SSE stream of live agent events, from the first event; any number of clients can stream the same session (replays the saved events once the session has finished) |
 | `GET` | `/research/{id}` | Get status + final report |
-| `POST` | `/research/{id}/followup` | Ask follow-up (reuses fetched sources). The session is `running` until it ends; a second follow-up sent meanwhile gets 400 |
-| `GET` | `/sessions` | List all sessions |
-| `DELETE` | `/research/{id}` | Delete a session |
+| `POST` | `/research/{id}/followup` | Ask follow-up (reuses fetched sources). The session is `running` until it ends; a second follow-up sent meanwhile gets 400. Same key, length cap and limit as `/research` |
+| `GET` | `/sessions` | List all sessions (API key if `API_KEY` is set, since it shows every caller's questions) |
+| `DELETE` | `/research/{id}` | Delete a session (API key if `API_KEY` is set) |
 | `GET` | `/health` | System health + embedder status |
 | `GET` | `/docs` | Interactive API docs (Swagger) |
 
@@ -284,7 +286,9 @@ What it can and can't tell you:
 
 ---
 
-## Known Limitations (checked 2026-11-14)
+## Known Limitations (checked 2026-11-15)
+
+Fixed on 2026-11-15: the full service had no authentication, no length limit on the question and no rate limit, so anyone who could reach it could read every caller's questions at `/sessions` and start unlimited research runs. It now has an optional API key, a question length cap and a per-IP hourly limit on research runs (see [Quick Start](#quick-start)), with tests.
 
 Fixed on 2026-11-14: a live stream shared by two clients (or a reconnecting EventSource) split the events between them and one never got DONE; follow-ups left the session looking finished while they ran, so two could run at once, and a failed follow-up was not recorded. Both have tests.
 
@@ -298,7 +302,7 @@ Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU b
 - **Streaming works across worker processes, with a short delay.** A running session's events are saved to the database as they happen (batched, at most every 0.5 s). If a stream request lands on a worker that isn't running the session, it follows those saved events instead of returning 404. On the worker that runs the session, events arrive instantly; on another worker they arrive up to about half a second later. With several workers on different machines, use a shared database instead of SQLite.
 - **The full service is not deployable on Vercel serverless.** `sentence-transformers` pulls in PyTorch, so the install bundle is about 5.6 GB, above Vercel's 500 MB function limit. The live demo therefore runs the stateless demo app with the lexical hashing embedder (see [The Live Demo](#the-live-demo)); run the full service locally or in a container on a VM.
 - **The demo's ranking and LLM stages are stand-ins.** Without a key, the planner, critic and writer are rules, not a model, and the demo's ranking measures word overlap. The demo shows the pipeline, streaming and citation checks working on live search results; it does not show answer quality.
-- **No authentication or rate limit on the full service.** `/sessions` lists every user's queries, and `/research` has no length limit on the question. (The demo has neither endpoint, caps questions at 200 characters and is rate limited.)
+- **Access control is one optional shared key.** With `API_KEY` unset (the default, for local development) the full service is open. There are no per-user accounts: anyone with the key sees every session in `/sessions`, and anyone with a session ID can read that report and its stream. The research limit is counted per IP in each worker process's memory, so with several workers a client gets the limit once per worker, and behind a reverse proxy every client shares the proxy's IP (the `X-Real-IP` header is only trusted on Vercel).
 - **Background work dies with the process.** Sessions run as FastAPI background tasks, not in a job queue. If the server restarts mid-run the session stays `running` in the database and is never resumed; a stream following it from another worker gives up after 30 minutes.
 - **A follow-up replaces the session's report and event log.** Only the latest answer is kept; there is no history of earlier follow-ups.
 - **No overall time limit per session.** Each HTTP call has its own timeout (15 s each for Wikipedia and arXiv, the `ddgs` library default for DuckDuckGo, 30 s for the planner and critic, 45 s for the synthesizer), so a slow run is bounded but can take a few minutes; there is no single deadline or cancel endpoint.
@@ -310,7 +314,7 @@ pip install -r requirements-dev.txt
 python -m pytest tests -v
 ```
 
-53 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (29) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, two clients streaming one live session and a client that reconnects mid-run (each gets every event and ends on DONE), following a session that runs on another worker, saving progress while a session runs, and follow-ups (the session is `running` while one runs, a second is refused, and a failed one is recorded without losing the earlier report). `tests/test_grounding.py` (8) covers the grounding check: a quoted sentence is supported and an invented one is not, a section must be backed by its own sources, an invented finding is listed with its support, only the part of a passage the writer saw counts, and no passages means no score. `tests/test_demo.py` (16) covers the project summary and fact check on the page, the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. They passed on 2026-11-14.
+67 tests, no network, Groq key or PyTorch needed: the Groq, Wikipedia and arXiv HTTP calls go to an in-process fake (`httpx.MockTransport`), DuckDuckGo is a fake `ddgs.DDGS`, and the embedder is a small bag-of-words stand-in. `tests/test_meridian.py` (29) covers the default model and CPU device, Wikipedia and DuckDuckGo parsing, one encode call per ranking and no parallel encodes across sessions, citation filtering, `degraded` status when the LLM is down, the saved event log, stream replay and queue cleanup, two clients streaming one live session and a client that reconnects mid-run (each gets every event and ends on DONE), following a session that runs on another worker, saving progress while a session runs, and follow-ups (the session is `running` while one runs, a second is refused, and a failed one is recorded without losing the earlier report). `tests/test_grounding.py` (8) covers the grounding check: a quoted sentence is supported and an invented one is not, a section must be backed by its own sources, an invented finding is listed with its support, only the part of a passage the writer saw counts, and no passages means no score. `tests/test_demo.py` (16) covers the project summary and fact check on the page, the hashing embedder (including that a relevant passage clears its relevance threshold) and its fallback, the simulated stages, and the demo endpoint: every stage streamed, a cited report, no LLM call without a key, real LLM calls with one, input limits, the rate limit, and that `main.py` exposes the demo `app` Vercel loads. `tests/test_guards.py` (14) covers the full service's guards: the API stays open with no key set; with one, each protected endpoint gives 401 for a missing or wrong key and starts no session, both header forms work, and a session ID alone still reads its report and stream; questions and follow-ups over the length cap get 400 before any work (a rejected follow-up does not claim the session); and the hourly limit returns 429 with `Retry-After`, counts follow-ups, ignores rejected requests, is per client and turns off at 0. They passed on 2026-11-15.
 
 GitHub Actions (`.github/workflows/tests.yml`) runs the whole suite on Python 3.12 (the version in `.python-version`, which Vercel also uses) on every push to `main` and on pull requests, installing `requirements.txt` + `requirements-dev.txt` only.
 

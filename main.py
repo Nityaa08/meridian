@@ -34,6 +34,8 @@ async def lifespan(app: FastAPI):
 
     # Per-session SSE event queues
     app.state.event_queues: dict[str, asyncio.Queue] = {}
+    # Per-IP research limit (app/limits.py); created on first use with the configured limit.
+    app.state.research_limiter = None
 
     yield
 
