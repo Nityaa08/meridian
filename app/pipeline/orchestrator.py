@@ -11,6 +11,7 @@ from app.agents.researcher import ResearcherAgent
 from app.agents.extractor import ExtractorAgent
 from app.agents.critic import CriticAgent
 from app.agents.synthesizer import SynthesizerAgent
+from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.session import ResearchSession
 
@@ -20,6 +21,18 @@ from app.models.session import ResearchSession
 STATUS_COMPLETED = "completed"
 STATUS_DEGRADED = "degraded"
 FINISHED_STATUSES = ("completed", "degraded", "failed")
+
+
+def _deadline_s() -> float | None:
+    """Seconds a whole research run (or follow-up) may take; None = no limit."""
+    return settings.session_timeout_s if settings.session_timeout_s > 0 else None
+
+
+def _timeout_message() -> str:
+    return (
+        f"Research stopped after {settings.session_timeout_s:g} s, the SESSION_TIMEOUT_S limit; "
+        "a search or LLM call was still running"
+    )
 
 
 def _history(queue: asyncio.Queue) -> list[dict]:
@@ -68,56 +81,58 @@ async def run_pipeline(
         session.status = "running"
         await db.commit()
 
+    deadline = asyncio.timeout(_deadline_s())
     try:
-        planner = PlannerAgent()
-        sub_queries = await planner.run(query, queue)
+        async with deadline:
+            planner = PlannerAgent()
+            sub_queries = await planner.run(query, queue)
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))
-            session = result.scalar_one_or_none()
-            if session:
-                session.sub_queries = sub_queries
-                await db.commit()
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))
+                session = result.scalar_one_or_none()
+                if session:
+                    session.sub_queries = sub_queries
+                    await db.commit()
 
-        researcher = ResearcherAgent()
-        tasks = [researcher.run(sq, queue) for sq in sub_queries]
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-        all_passages = []
-        for r in raw_results:
-            if isinstance(r, Exception):
-                continue
-            all_passages.extend(r)
+            researcher = ResearcherAgent()
+            tasks = [researcher.run(sq, queue) for sq in sub_queries]
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+            all_passages = []
+            for r in raw_results:
+                if isinstance(r, Exception):
+                    continue
+                all_passages.extend(r)
 
-        # Deduplicate by URL — prevents duplicate passages from inflating results
-        seen_urls = set()
-        deduped = []
-        for p in all_passages:
-            url = p.get("url", "")
-            if url and url in seen_urls:
-                continue
-            if url:
-                seen_urls.add(url)
-            deduped.append(p)
-        all_passages = deduped
+            # Deduplicate by URL — prevents duplicate passages from inflating results
+            seen_urls = set()
+            deduped = []
+            for p in all_passages:
+                url = p.get("url", "")
+                if url and url in seen_urls:
+                    continue
+                if url:
+                    seen_urls.add(url)
+                deduped.append(p)
+            all_passages = deduped
 
-        sources_searched = len(all_passages)
+            sources_searched = len(all_passages)
 
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))
-            session = result.scalar_one_or_none()
-            if session:
-                session.sources_raw = all_passages
-                session.sources_searched = sources_searched
-                await db.commit()
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(ResearchSession).where(ResearchSession.id == session_id))
+                session = result.scalar_one_or_none()
+                if session:
+                    session.sources_raw = all_passages
+                    session.sources_searched = sources_searched
+                    await db.commit()
 
-        extractor = ExtractorAgent(embedder)
-        top_passages = await extractor.run(query, all_passages, queue)
+            extractor = ExtractorAgent(embedder)
+            top_passages = await extractor.run(query, all_passages, queue)
 
-        critic = CriticAgent()
-        critique = await critic.run(query, top_passages, queue)
+            critic = CriticAgent()
+            critique = await critic.run(query, top_passages, queue)
 
-        synthesizer = SynthesizerAgent()
-        report = await synthesizer.run(query, top_passages, critique, queue)
+            synthesizer = SynthesizerAgent()
+            report = await synthesizer.run(query, top_passages, critique, queue)
 
         warnings = collect_warnings(
             planner=planner,
@@ -161,10 +176,11 @@ async def run_pipeline(
                 await db.commit()
 
     except Exception as e:
+        message = _timeout_message() if deadline.expired() else str(e)
         error_event = AgentEvent(
             agent="Orchestrator",
             type="ERROR",
-            message=str(e),
+            message=message,
         )
         await queue.put(error_event)
         async with AsyncSessionLocal() as db:
@@ -172,7 +188,7 @@ async def run_pipeline(
             session = result.scalar_one_or_none()
             if session:
                 session.status = "failed"
-                session.error_message = str(e)
+                session.error_message = message
                 session.agent_events = _history(queue) or [asdict(error_event)]
                 session.completed_at = datetime.utcnow()
                 await db.commit()
@@ -221,19 +237,22 @@ async def run_followup_pipeline(
         )
         return
 
+    deadline = asyncio.timeout(_deadline_s())
     try:
-        extractor = ExtractorAgent(embedder)
-        top_passages = await extractor.run(followup_question, all_passages, queue)
+        async with deadline:
+            extractor = ExtractorAgent(embedder)
+            top_passages = await extractor.run(followup_question, all_passages, queue)
 
-        critic = CriticAgent()
-        critique = await critic.run(followup_question, top_passages, queue)
+            critic = CriticAgent()
+            critique = await critic.run(followup_question, top_passages, queue)
 
-        synthesizer = SynthesizerAgent()
-        report = await synthesizer.run(
-            query, top_passages, critique, queue, followup_context=followup_question
-        )
+            synthesizer = SynthesizerAgent()
+            report = await synthesizer.run(
+                query, top_passages, critique, queue, followup_context=followup_question
+            )
     except Exception as e:
-        await _end_followup_with_error(session_id, queue, str(e), previous_status)
+        message = _timeout_message() if deadline.expired() else str(e)
+        await _end_followup_with_error(session_id, queue, message, previous_status)
         return
 
     warnings = collect_warnings(

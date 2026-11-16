@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     api_key: str = ""
     max_query_chars: int = 1000
     research_rate_limit_per_hour: int = 30  # per client IP, per process; 0 turns it off
+    # Deadline for one whole research run or follow-up, in seconds; 0 turns it off.
+    # Each HTTP call has its own timeout, but together they could run for minutes.
+    session_timeout_s: float = 180
     demo_mode: bool = False
     demo_rate_limit_per_hour: int = 12
     demo_max_query_chars: int = 200
