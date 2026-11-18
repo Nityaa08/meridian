@@ -1,6 +1,6 @@
 """Grounding check: each report sentence against the passages it may cite."""
 from app.agents import simulated
-from app.pipeline.grounding import check_report, sentences, support, PASSAGE_CHARS
+from app.pipeline.grounding import check_report, sentences, strip_citation, support, PASSAGE_CHARS
 
 ATTN = {
     "url": "https://en.wikipedia.org/wiki/Attention_(machine_learning)",
@@ -84,3 +84,39 @@ def test_no_passages_means_no_score_not_zero():
     report = simulated.synthesize("anything", [])
     g = check_report(report, [])
     assert g["sentences_checked"] == 0 and g["score"] is None
+
+
+# A web result as the live demo got it on 2026-11-18: the search engine's title shares no
+# words with the snippet, so the old check reported the title itself as an unsupported sentence.
+WEB = {
+    "url": "https://arxiv.org/abs/2412.11854",
+    "title": "[2412.11854] Towards Understanding Systems Trade-offs in ...",
+    "source": "duckduckgo",
+    "text": "In this section, we explore the bottlenecks and trade-offs associated with introducing "
+            "retrieval augmentation into a traditional language model pipeline.",
+}
+
+
+def test_a_findings_citation_is_not_checked_as_a_sentence():
+    report = simulated.synthesize("What are the trade-offs of RAG?", [WEB])
+    assert report["key_findings"][0].endswith(f"({WEB['title']})")
+    g = check_report(report, [WEB])
+    assert all("Towards Understanding" not in u["sentence"] for u in g["unsupported"])
+    assert g["score"] == 1.0
+    # Only the quoted sentence of the finding is counted, not the citation after it.
+    finding_sentences = [s for s in sentences(report["key_findings"][0]) if "(" not in s]
+    assert g["sentences_checked"] == len(sentences(report["summary"])) + len(finding_sentences) + 1
+
+
+def test_strip_citation_only_removes_a_known_title_at_the_end():
+    titles = [WEB["title"], "Attention (machine learning)"]
+    assert strip_citation("Claim one. (Attention (machine learning))", titles) == "Claim one."
+    assert strip_citation("Claim (an aside) here.", titles) == "Claim (an aside) here."
+    assert strip_citation("Claim. (Some other title)", titles) == "Claim. (Some other title)"
+
+
+def test_an_invented_finding_still_fails_after_its_citation_is_removed():
+    report = {"summary": "", "sections": [],
+              "key_findings": [f"Retrieval cuts hallucinations by 94 percent in every benchmark. ({WEB['title']})"]}
+    g = check_report(report, [WEB])
+    assert g["sentences_checked"] == 1 and g["supported"] == 0

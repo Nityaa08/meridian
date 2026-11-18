@@ -43,6 +43,21 @@ def support(sentence: str, passages: list[str]) -> float:
     return max((len(words & content_words(p)) / len(words) for p in passages), default=0.0)
 
 
+def strip_citation(text: str, titles: list[str]) -> str:
+    """Drop a trailing "(source title)" citation, so the title is not checked as if it were a claim.
+
+    The demo writer ends each key finding with the title of the passage it quotes. The sentence
+    splitter made that title a sentence of its own, and a title whose words are not in its
+    passage's text (a search engine's title, for one) was reported as unsupported.
+    """
+    t = str(text).rstrip()
+    for title in sorted({x.strip() for x in titles if x and x.strip()}, key=len, reverse=True):
+        cite = f"({title})"
+        if t.endswith(cite):
+            return t[: -len(cite)].rstrip()
+    return t
+
+
 def check_report(report: dict, passages: list[dict]) -> dict:
     if not passages:
         # Nothing was retrieved, so the report is a "no sources found" note, not claims.
@@ -50,9 +65,11 @@ def check_report(report: dict, passages: list[dict]) -> dict:
                 "unsupported": [], "method": "skipped: no passages"}
     by_url = {p.get("url"): p.get("text", "")[:PASSAGE_CHARS] for p in passages if p.get("url")}
     all_texts = [p.get("text", "")[:PASSAGE_CHARS] for p in passages]
+    titles = [" ".join(str(p.get("title", "")).split()) for p in passages] + ["source"]
 
     parts: list[tuple[str, str, list[str]]] = [("summary", report.get("summary", ""), all_texts)]
-    parts += [("key finding", f, all_texts) for f in report.get("key_findings", []) if isinstance(f, str)]
+    parts += [("key finding", strip_citation(" ".join(f.split()), titles), all_texts)
+              for f in report.get("key_findings", []) if isinstance(f, str)]
     for s in report.get("sections", []):
         cited = [by_url[u] for u in s.get("sources", []) if u in by_url]
         parts.append((f"section: {s.get('title', '')}", s.get("content", ""), cited))
