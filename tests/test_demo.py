@@ -83,6 +83,16 @@ class TestSimulatedStages:
         assert c["contradictions"] == [] and c["simulated"] is True
         assert any("arXiv" in g for g in c["gaps"])
 
+    def test_a_web_result_on_arxiv_counts_as_an_arxiv_paper(self):
+        # Live on 2026-11-18 the top passages were arxiv.org pages found by web search, and the
+        # critic still reported "No arXiv paper among the top passages".
+        web = [{"source": "duckduckgo", "similarity": 0.4, "url": "https://arxiv.org/abs/2506.00054"},
+               {"source": "duckduckgo", "similarity": 0.3, "url": "https://en.wikipedia.org/wiki/RAG"}]
+        gaps = simulated.critique(web)["gaps"]
+        assert not any("arXiv" in g for g in gaps) and not any("encyclopedia" in g for g in gaps)
+        other = [{"source": "duckduckgo", "similarity": 0.4, "url": "https://notarxiv.org/abs/1"}]
+        assert any("arXiv" in g for g in simulated.critique(other)["gaps"])
+
     def test_synthesis_quotes_passages_and_cites_their_urls(self):
         passages = [
             {"source": "wikipedia", "title": "A", "url": "https://w/a", "text": "First fact. Second fact. Third.", "similarity": .6},

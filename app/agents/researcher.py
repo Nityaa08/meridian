@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import re
 import httpx
 from urllib.parse import quote
 from xml.etree import ElementTree
@@ -7,6 +9,28 @@ from app.agents.base import BaseAgent
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 # Wikimedia asks API clients for a descriptive User-Agent with contact info.
 USER_AGENT = "Meridian/1.0 (https://github.com/Nityaa08/meridian)"
+log = logging.getLogger(__name__)
+
+# Web search snippets often start with the page's date: "May 28, 2025 · Our analysis ...".
+_SNIPPET_DATE = re.compile(
+    r"^(?:[A-Z][a-z]{2,8}\.? \d{1,2}, \d{4}|\d{1,2} [A-Z][a-z]{2,8}\.? \d{4}|\d+ (?:minutes?|hours?|days?|weeks?) ago)"
+    r"\s*[·\-—]\s*"
+)
+# Some search backends run several result titles together: "A survey ...Trade-Offs in RAG - LinkedIn...".
+_JOINED_TITLES = re.compile(r"(?:\.\.\.|…)(?=\S)")
+
+
+def clean_web_title(title: str, max_chars: int = 160) -> str:
+    """The first title when several were run together, and never longer than max_chars."""
+    t = " ".join(str(title).split())
+    m = _JOINED_TITLES.search(t)
+    if m:
+        t = t[: m.start()].rstrip() + " ..."
+    return t if len(t) <= max_chars else t[: max_chars - 4].rsplit(" ", 1)[0] + " ..."
+
+
+def clean_web_snippet(text: str) -> str:
+    return _SNIPPET_DATE.sub("", " ".join(str(text).split()), count=1)
 
 
 class ResearcherAgent(BaseAgent):
@@ -59,7 +83,8 @@ class ResearcherAgent(BaseAgent):
                 )
                 resp.raise_for_status()
                 return parse_wikipedia_response(resp.json())
-        except Exception:
+        except Exception as exc:
+            log.warning("Wikipedia search failed for %r: %s", query, exc.__class__.__name__)
             return []
 
     async def _search_arxiv(self, query: str) -> list[dict]:
@@ -94,7 +119,8 @@ class ResearcherAgent(BaseAgent):
                             "source": "arxiv",
                         })
                 return passages
-        except Exception:
+        except Exception as exc:
+            log.warning("arXiv search failed for %r: %s", query, exc.__class__.__name__)
             return []
 
     async def _search_duckduckgo(self, query: str) -> list[dict]:
@@ -111,15 +137,16 @@ class ResearcherAgent(BaseAgent):
             results = DDGS().text(query, max_results=3) or []
             return [
                 {
-                    "title": r.get("title", ""),
+                    "title": clean_web_title(r.get("title", "")),
                     "url": r.get("href", ""),
-                    "text": r.get("body", ""),
+                    "text": clean_web_snippet(r.get("body", "")),
                     "source": "duckduckgo",
                 }
                 for r in results
-                if r.get("body")
+                if clean_web_snippet(r.get("body") or "")
             ]
-        except Exception:
+        except Exception as exc:
+            log.warning("Web search failed for %r: %s", query, exc.__class__.__name__)
             return []
 
 

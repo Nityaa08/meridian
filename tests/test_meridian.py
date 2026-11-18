@@ -7,7 +7,7 @@ import pytest
 
 from app.agents.base import AgentEvent
 from app.agents.extractor import ExtractorAgent
-from app.agents.researcher import ResearcherAgent, parse_wikipedia_response
+from app.agents.researcher import ResearcherAgent, clean_web_snippet, clean_web_title, parse_wikipedia_response
 from app.agents.synthesizer import filter_citations
 from app.config import Settings
 from app.pipeline.events import EventQueue, active_session_count, release_queue
@@ -85,6 +85,52 @@ class TestResearcher:
 
         monkeypatch.setattr(ddgs, "DDGS", Broken)
         assert run(ResearcherAgent()._search_duckduckgo("x")) == []
+
+
+    def test_web_results_are_cleaned_as_the_live_demo_got_them(self, services, monkeypatch):
+        """Two web results as the live demo returned them on 2026-11-18."""
+        import ddgs
+
+        class Live:
+            def text(self, *a, **k):
+                return [
+                    {"title": "[2506.00054] Retrieval-Augmented Generation: A Comprehensive ...Trade-Offs in "
+                              "Retrieval-Augmented Generation - LinkedInRAG vs Large Context Window - Redis",
+                     "href": "https://arxiv.org/abs/2506.00054",
+                     "body": "May 28, 2025 · Our analysis reveals recurring trade-offs between retrieval precision."},
+                    {"title": "Towards Understanding Systems Trade-offs in Retrieval ...",
+                     "href": "https://arxiv.org/html/2412.11854v1",
+                     "body": "In this section, we explore the bottlenecks."},
+                    {"title": "Empty", "href": "https://example.org/e", "body": "3 days ago · "},
+                ]
+
+        monkeypatch.setattr(ddgs, "DDGS", Live)
+        got = run(ResearcherAgent()._search_duckduckgo("rag trade-offs"))
+        assert [p["title"] for p in got] == [
+            "[2506.00054] Retrieval-Augmented Generation: A Comprehensive ...",
+            "Towards Understanding Systems Trade-offs in Retrieval ...",
+        ]
+        assert got[0]["text"] == "Our analysis reveals recurring trade-offs between retrieval precision."
+        assert got[1]["text"] == "In this section, we explore the bottlenecks."
+
+    def test_cleaning_leaves_ordinary_titles_and_snippets_alone(self):
+        assert clean_web_title("Node.js docs") == "Node.js docs"
+        assert clean_web_title("Attention ... is all you need") == "Attention ... is all you need"
+        assert len(clean_web_title("word " * 100)) <= 160
+        assert clean_web_snippet("Version 1.2 · release notes") == "Version 1.2 · release notes"
+        assert clean_web_snippet("Dec 16, 2024 · RAG offers a promising approach.") == "RAG offers a promising approach."
+
+    def test_a_failed_search_is_logged_not_silent(self, services, monkeypatch, caplog):
+        import ddgs
+
+        class Broken:
+            def text(self, *a, **k):
+                raise RuntimeError("blocked")
+
+        monkeypatch.setattr(ddgs, "DDGS", Broken)
+        with caplog.at_level("WARNING", logger="app.agents.researcher"):
+            assert run(ResearcherAgent()._search_duckduckgo("x")) == []
+        assert "Web search failed" in caplog.text and "RuntimeError" in caplog.text
 
 
 # ─── Extractor ────────────────────────────────────────────────────────────────

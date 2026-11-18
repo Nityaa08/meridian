@@ -9,6 +9,7 @@ only what can be counted, and the writer quotes sentences instead of
 summarising. Retrieval (Wikipedia, arXiv) and ranking are not simulated.
 """
 import re
+from urllib.parse import urlsplit
 
 SIMULATED_NOTE = (
     "LLM stages are simulated in this demo (no API key): sub-questions come from templates, "
@@ -42,8 +43,18 @@ def plan(query: str) -> list[str]:
     return out
 
 
+def kind_of(passage: dict) -> str:
+    """Where a passage really comes from: a web result on arxiv.org is an arXiv paper."""
+    host = urlsplit(passage.get("url") or "").netloc.lower()
+    if host == "arxiv.org" or host.endswith(".arxiv.org"):
+        return "arxiv"
+    if host.endswith("wikipedia.org"):
+        return "wikipedia"
+    return passage.get("source", "unknown")
+
+
 def critique(passages: list[dict]) -> dict:
-    sources = {p.get("source", "unknown") for p in passages}
+    sources = {kind_of(p) for p in passages}
     gaps = []
     if not passages:
         gaps.append("No passages met the relevance threshold.")
