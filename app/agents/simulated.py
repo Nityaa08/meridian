@@ -78,6 +78,9 @@ def critique(passages: list[dict]) -> dict:
 
 def first_sentences(text: str, n: int = 2, max_chars: int = 420) -> str:
     sents = _SENT.split(" ".join(text.split()))
+    # Web pages often open by repeating the question ("What is a vector database?").
+    # A question is not a finding, so quote the statements after it.
+    sents = [x for x in sents if not x.rstrip().endswith("?")] or sents
     out = " ".join(sents[:n])
     return out if len(out) <= max_chars else out[: max_chars - 3].rsplit(" ", 1)[0] + "..."
 

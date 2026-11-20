@@ -103,6 +103,25 @@ class TestSimulatedStages:
         assert {u for sec in s["sections"] for u in sec["sources"]} == {"https://w/a", "https://x/b"}
 
 
+    def test_a_question_at_the_start_of_a_passage_is_not_quoted_as_a_finding(self):
+        # Live on 2026-11-20, "what is a vector database" gave two key findings that were only
+        # "What is a vector database?": web snippets that open by repeating the question.
+        passages = [
+            {"source": "duckduckgo", "title": "Elastic", "url": "https://e/v",
+             "text": "What is a vector database? A vector database stores embeddings for similarity search.",
+             "similarity": .3},
+            {"source": "duckduckgo", "title": "IBM", "url": "https://i/v",
+             "text": "What is a vector database? Why use one? It indexes high-dimensional vectors.", "similarity": .2},
+        ]
+        s = simulated.synthesize("what is a vector database", passages)
+        assert s["summary"] == "A vector database stores embeddings for similarity search."
+        assert s["key_findings"] == ["A vector database stores embeddings for similarity search. (Elastic)",
+                                     "It indexes high-dimensional vectors. (IBM)"]
+        assert not any("?" in f for f in s["key_findings"])
+        # A passage that is only a question is still quoted rather than dropped.
+        assert simulated.first_sentences("Is it safe?") == "Is it safe?"
+
+
 class TestDemoApp:
     def test_home_is_the_demo_page(self, demo):
         r = demo.get("/")
