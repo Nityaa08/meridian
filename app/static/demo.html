@@ -358,6 +358,9 @@ footer i{color:var(--ink-2)}
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
+  // Only http(s) links are clickable: a search result is untrusted, and a javascript: URL would run on click.
+  const safeUrl = (u) => /^https?:\/\/\S+$/i.test(String(u ?? "").trim()) ? String(u).trim() : "";
+  const link = (u, label) => safeUrl(u) ? `<a href="${esc(safeUrl(u))}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : `<span>${esc(label)}</span>`;
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   // [agent id, numeral, label, what it does, LLM-backed]
   const STAGES = [
@@ -485,7 +488,7 @@ data: {"agent": "Orchestrator", "type": "REPORT", "data": {"status": "completed"
       const max = Math.max(...sources.map(s => s.relevance_score), 0.01);
       h += `<h3><span class="n">${++n}.</span>Sources</h3><ol class="sources">${sources.map((s, i) => {
         const [k, cls] = kind(s.url);
-        return `<li id="src-${i + 1}"><span class="sn">${i + 1}</span><div><div class="s-t"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a><span class="stag${cls}">${k}</span></div>`
+        return `<li id="src-${i + 1}"><span class="sn">${i + 1}</span><div><div class="s-t">${link(s.url, s.title)}<span class="stag${cls}">${k}</span></div>`
           + `<div class="s-m"><span class="url">${esc(s.url.replace(/^https?:\/\//, ""))}</span><span>relevance ${s.relevance_score.toFixed(3)} <span class="rel" aria-hidden="true"><i style="width:${(s.relevance_score / max * 100).toFixed(0)}%"></i></span></span></div>`
           + (excerpts[i + 1] ? `<blockquote class="excerpt">“${esc(excerpts[i + 1])}”</blockquote>` : "") + `</div></li>`;
       }).join("")}</ol>`;

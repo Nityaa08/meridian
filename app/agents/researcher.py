@@ -9,6 +9,13 @@ from app.agents.base import BaseAgent
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 # Wikimedia asks API clients for a descriptive User-Agent with contact info.
 USER_AGENT = "Meridian/1.0 (https://github.com/Nityaa08/meridian)"
+
+
+def safe_url(url) -> str:
+    """Only http(s) links leave the researcher. Search results are untrusted: a javascript: or data: URL
+    would run when someone clicks it on the page, so any other scheme becomes no link at all."""
+    url = str(url or "").strip()
+    return url if re.match(r"(?i)^https?://\S+$", url) else ""
 log = logging.getLogger(__name__)
 
 # Web search snippets often start with the page's date: "May 28, 2025 · Our analysis ...".
@@ -114,7 +121,7 @@ class ResearcherAgent(BaseAgent):
                     if summary:
                         passages.append({
                             "title": title,
-                            "url": url,
+                            "url": safe_url(url),
                             "text": summary,
                             "source": "arxiv",
                         })
@@ -138,7 +145,7 @@ class ResearcherAgent(BaseAgent):
             return [
                 {
                     "title": clean_web_title(r.get("title", "")),
-                    "url": r.get("href", ""),
+                    "url": safe_url(r.get("href")),
                     "text": clean_web_snippet(r.get("body", "")),
                     "source": "duckduckgo",
                 }
@@ -161,5 +168,5 @@ def parse_wikipedia_response(data: dict) -> list[dict]:
             continue
         title = page.get("title", "")
         url = page.get("fullurl") or "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_"))
-        passages.append({"title": title, "url": url, "text": extract, "source": "wikipedia"})
+        passages.append({"title": title, "url": safe_url(url), "text": extract, "source": "wikipedia"})
     return passages

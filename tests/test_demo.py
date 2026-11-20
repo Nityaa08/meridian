@@ -206,3 +206,18 @@ def test_main_exposes_a_top_level_app_in_demo_mode():
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True,
                          cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     assert "/api/research" in out.stdout and "/health" in out.stdout
+
+
+def test_only_http_links_survive_from_search_results():
+    from app.agents.researcher import safe_url
+
+    assert safe_url("https://example.org/a") == "https://example.org/a"
+    assert safe_url(" HTTP://example.org ") == "HTTP://example.org"
+    for bad in ["javascript:alert(1)", " JavaScript:alert(1)", "data:text/html,<b>x</b>", "vbscript:x", "//evil.example", "", None]:
+        assert safe_url(bad) == ""
+
+
+def test_demo_page_only_links_http_urls():
+    html = open("app/static/demo.html", encoding="utf-8").read()
+    assert "const safeUrl" in html
+    assert 'href="${esc(s.url)}"' not in html
