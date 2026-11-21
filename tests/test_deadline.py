@@ -78,4 +78,6 @@ def test_a_timeout_inside_an_agent_is_not_reported_as_the_deadline(client, servi
     sid = client.post("/research", json={"query": "transformer attention"}).json()["session_id"]
     body = client.get(f"/research/{sid}").json()
     assert body["status"] == "failed"
-    assert body["error_message"] == "upstream read timed out"
+    # The run's own deadline is not blamed; the exception's text stays in the server log.
+    assert "TimeoutError" in body["error_message"] and "SESSION_TIMEOUT_S" not in body["error_message"]
+    assert "upstream read timed out" not in body["error_message"]

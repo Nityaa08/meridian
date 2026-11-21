@@ -12,6 +12,7 @@ from app.agents.extractor import ExtractorAgent
 from app.agents.critic import CriticAgent
 from app.agents.synthesizer import SynthesizerAgent
 from app.config import settings
+from app.errors import describe_pipeline_error, log_failure
 from app.database import AsyncSessionLocal
 from app.models.session import ResearchSession
 
@@ -176,7 +177,8 @@ async def run_pipeline(
                 await db.commit()
 
     except Exception as e:
-        message = _timeout_message() if deadline.expired() else str(e)
+        log_failure("Research run", e)
+        message = _timeout_message() if deadline.expired() else describe_pipeline_error(e)
         error_event = AgentEvent(
             agent="Orchestrator",
             type="ERROR",
@@ -251,7 +253,8 @@ async def run_followup_pipeline(
                 query, top_passages, critique, queue, followup_context=followup_question
             )
     except Exception as e:
-        message = _timeout_message() if deadline.expired() else str(e)
+        log_failure("Research run", e)
+        message = _timeout_message() if deadline.expired() else describe_pipeline_error(e)
         await _end_followup_with_error(session_id, queue, message, previous_status)
         return
 

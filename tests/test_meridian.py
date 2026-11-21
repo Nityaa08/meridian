@@ -375,7 +375,7 @@ class TestApi:
 
         status, error = self._status_and_error(client, sid)
         assert status == "completed"  # back to what it was, so a new follow-up can be asked
-        assert error and "synthesizer exploded" in error
+        assert error and "RuntimeError" in error and "synthesizer exploded" not in error
         after = client.get(f"/research/{sid}").json()
         assert after["report"] == before["report"]
         assert _events(client.get(f"/research/{sid}/stream").text)[-1]["type"] == "ERROR"
@@ -512,3 +512,46 @@ class TestApi:
         body = client.get("/health").json()
         assert body["model"] == "openai/gpt-oss-20b"
         assert body["embedder"] == "loaded"
+
+
+# --- what users are told when something fails -------------------------------------
+
+def test_llm_errors_are_described_without_the_exception_text():
+    import json as _json
+    import httpx
+    from app.errors import describe_llm_error
+
+    req = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions?key=secret")
+    for status, expected in [(401, "API key was refused"), (429, "rate limit"), (503, "provider had an error"),
+                             (400, "HTTP 400")]:
+        err = httpx.HTTPStatusError("boom", request=req, response=httpx.Response(status, request=req))
+        msg = describe_llm_error(err)
+        assert expected in msg and "groq.com" not in msg and "secret" not in msg
+    assert describe_llm_error(httpx.ReadTimeout("t", request=req)) == "the provider did not answer in time"
+    bad = _json.JSONDecodeError("Expecting value", '{"summary": "private model output', 0)
+    assert "private" not in describe_llm_error(bad) and "not JSON" in describe_llm_error(bad)
+    assert describe_llm_error(KeyError("choices")) == "the provider's response had an unexpected shape"
+
+
+def test_a_failed_llm_call_is_reported_by_kind_in_events_and_warnings(monkeypatch):
+    import asyncio
+    import httpx
+    from app.agents.critic import CriticAgent
+
+    class Refusing:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **k):
+            req = httpx.Request("POST", url)
+            raise httpx.HTTPStatusError("Client error '401 Unauthorized' for url '" + url + "'",
+                                        request=req, response=httpx.Response(401, request=req))
+
+    monkeypatch.setattr("app.agents.critic.settings.demo_mode", False)
+    monkeypatch.setattr("app.agents.critic.httpx.AsyncClient", Refusing)
+    critic, queue = CriticAgent(), asyncio.Queue()
+    asyncio.run(critic.run("q", [{"title": "t", "text": "x", "url": "https://e.org", "source": "wikipedia"}], queue))
+    events = [queue.get_nowait() for _ in range(queue.qsize())]
+    shown = " ".join(e.message + str(e.data) for e in events) + critic.error
+    assert "API key was refused" in critic.error
+    assert "Unauthorized" not in shown and "http" not in shown.replace("HTTP 401", "")

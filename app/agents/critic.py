@@ -3,6 +3,7 @@ import json
 import httpx
 from app.agents.base import BaseAgent
 from app.config import settings
+from app.errors import describe_llm_error, log_failure
 from app.agents import simulated
 
 
@@ -54,8 +55,9 @@ class CriticAgent(BaseAgent):
                     content = resp.json()["choices"][0]["message"]["content"]
                     critique = json.loads(content)
             except Exception as e:
-                self.error = f"{e.__class__.__name__}: {e}"
-                await self.emit(queue, "CRITIQUING", f"Critic fallback: {e}", {"error": str(e)})
+                log_failure("Critic LLM call", e)
+                self.error = describe_llm_error(e)
+                await self.emit(queue, "CRITIQUING", f"Critic fallback: {self.error}", {"error": self.error})
                 critique = {
                     "contradictions": [],
                     "gaps": ["Unable to perform full critique"],

@@ -4,6 +4,7 @@ import numpy as np
 import httpx
 from app.agents.base import BaseAgent
 from app.config import settings
+from app.errors import describe_llm_error, log_failure
 from app.agents import simulated
 from app.pipeline.grounding import check_report
 
@@ -94,8 +95,9 @@ class SynthesizerAgent(BaseAgent):
                     content = resp.json()["choices"][0]["message"]["content"]
                     synthesis = json.loads(content)
             except Exception as e:
-                self.error = f"{e.__class__.__name__}: {e}"
-                await self.emit(queue, "SYNTHESIZING", f"Synthesizer fallback: {e}", {"error": str(e)})
+                log_failure("Synthesizer LLM call", e)
+                self.error = describe_llm_error(e)
+                await self.emit(queue, "SYNTHESIZING", f"Synthesizer fallback: {self.error}", {"error": self.error})
                 synthesis = {
                     "summary": f"Research on: {query}",
                     "key_findings": ["Synthesis failed — raw passages available"],

@@ -3,6 +3,7 @@ import json
 import httpx
 from app.agents.base import BaseAgent
 from app.config import settings
+from app.errors import describe_llm_error, log_failure
 from app.agents import simulated
 
 
@@ -43,8 +44,9 @@ class PlannerAgent(BaseAgent):
                     parsed = json.loads(content)
                     sub_questions = parsed.get("sub_questions", [query])
             except Exception as e:
-                self.error = f"{e.__class__.__name__}: {e}"
-                await self.emit(queue, "PLANNING", f"Planner fallback: {e}", {"error": str(e)})
+                log_failure("Planner LLM call", e)
+                self.error = describe_llm_error(e)
+                await self.emit(queue, "PLANNING", f"Planner fallback: {self.error}", {"error": self.error})
                 sub_questions = [query]
 
         if not isinstance(sub_questions, list) or not sub_questions:

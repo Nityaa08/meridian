@@ -30,6 +30,7 @@ from app.agents.simulated import SIMULATED_NOTE
 from app.agents.synthesizer import SynthesizerAgent
 from app.config import settings
 from app.embedders import load_embedder
+from app.errors import describe_pipeline_error, log_failure
 from app.limits import RateLimiter, client_ip  # noqa: F401  (RateLimiter re-exported for tests)
 from app.pipeline.orchestrator import STATUS_COMPLETED, STATUS_DEGRADED, collect_warnings
 
@@ -157,7 +158,8 @@ def register_demo_routes(app: FastAPI) -> None:
                 yield _sse({"agent": "Orchestrator", "type": "REPORT", "message": "Research complete",
                             "data": result})
             except Exception as e:  # report the failure in-band; headers are already sent
-                yield _sse(asdict(AgentEvent(agent="Orchestrator", type="ERROR", message=str(e))))
+                log_failure("Demo research run", e)
+                yield _sse(asdict(AgentEvent(agent="Orchestrator", type="ERROR", message=describe_pipeline_error(e))))
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
