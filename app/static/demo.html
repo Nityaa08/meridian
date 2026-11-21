@@ -248,7 +248,7 @@ footer i{color:var(--ink-2)}
     <dl>
       <div><dt>The problem</dt><dd>One search and one chunk rarely answer a real question, and an LLM answer rarely shows where it came from.</dd></div>
       <div><dt>What I built</dt><dd>A <b>five-agent research API</b>: plan sub-questions, search Wikipedia and arXiv concurrently, rank passages with embeddings, critique, write a cited report. Every stage streams live over SSE.</dd></div>
-      <div><dt>Evidence</dt><dd>Every report gets a <b>grounding check</b>: each sentence is matched against the passages it cites, and unsupported ones are listed. <b>53 tests</b>, CI on every push.</dd></div>
+      <div><dt>Evidence</dt><dd>Every report gets a <b>grounding check</b>: each sentence is matched against the passages it cites, and unsupported ones are listed. <b>83 tests</b>, CI on every push.</dd></div>
       <div><dt>Methods</dt><dd>Python, FastAPI, asyncio fan-out, Server-Sent Events, embeddings, SQLite sessions, Groq (optional).</dd></div>
     </dl>
     <p class="steps"><b>1</b>Press Research. <b>2</b>Watch the lab notebook fill in, stage by stage. <b>3</b>Read the fact check under the report.</p>
