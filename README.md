@@ -2,11 +2,11 @@
 
 [![tests](https://github.com/Nityaa08/meridian/actions/workflows/tests.yml/badge.svg)](https://github.com/Nityaa08/meridian/actions/workflows/tests.yml)
 
-**Live demo: [meridian-nityashree.vercel.app](https://meridian-nityashree.vercel.app)** (real search and ranking; LLM stages simulated unless a key is set) · by [Nityashree S](https://nityashree.in)
+**Live demo: [meridian.nityashree.in](https://meridian.nityashree.in)** (real search and ranking; LLM stages simulated unless a key is set) · by [Nityashree S](https://nityashree.in)
 
 > A five-stage research pipeline: an LLM splits your question into sub-questions, the sub-questions are searched concurrently, local embeddings rank the passages, an LLM reviews them for gaps and contradictions, and an LLM writes a structured report — with every stage streamed live over Server-Sent Events.
 
-[![Demo page, set like a research journal: the question as the title line, a cited report with numbered sources, and a lab notebook in the margin logging each pipeline stage with timestamps](docs/screenshot.png)](https://meridian-nityashree.vercel.app)
+[![Demo page, set like a research journal: the question as the title line, a cited report with numbered sources, and a lab notebook in the margin logging each pipeline stage with timestamps](docs/screenshot.png)](https://meridian.nityashree.in)
 
 ## Run it in 1 minute
 
