@@ -221,3 +221,59 @@ def test_demo_page_only_links_http_urls():
     html = open("app/static/demo.html", encoding="utf-8").read()
     assert "const safeUrl" in html
     assert 'href="${esc(s.url)}"' not in html
+
+
+class TestDemoRunLifetime:
+    def test_a_run_past_the_deadline_ends_with_an_error_naming_the_limit(self, demo, monkeypatch):
+        import asyncio as aio
+
+        async def slow(query, embedder, queue):
+            await aio.sleep(5)
+
+        monkeypatch.setattr("app.demo_app.research", slow)
+        monkeypatch.setattr(settings, "session_timeout_s", 0.2)
+        evs = events(demo.get("/api/research", params={"q": "attention"}).text)
+        assert evs[-1]["type"] == "ERROR"
+        assert "SESSION_TIMEOUT_S" in evs[-1]["message"]
+
+    def test_closing_the_stream_cancels_the_run(self, services, monkeypatch):
+        # Before 2026-11-25 a visitor who closed the tab left the run going, still
+        # spending searches and (with a key) LLM calls.
+        import asyncio as aio
+
+        from starlette.requests import Request
+
+        state = {"started": False, "cancelled": False}
+
+        async def endless(query, embedder, queue):
+            state["started"] = True
+            try:
+                await aio.sleep(60)
+            except aio.CancelledError:
+                state["cancelled"] = True
+                raise
+
+        monkeypatch.setattr(settings, "demo_mode", True)
+        monkeypatch.setattr(settings, "embedder_backend", "hashing")
+        monkeypatch.setattr("app.demo_app.research", endless)
+        app = create_demo_app()
+        endpoint = next(r.endpoint for r in app.routes if getattr(r, "path", "") == "/api/research")
+
+        async def go():
+            request = Request({"type": "http", "headers": [], "client": ("198.51.100.9", 1), "app": app})
+            response = await endpoint(request, q="attention")
+            body = response.body_iterator
+            await body.__anext__()            # the START event
+            waiting = aio.ensure_future(body.__anext__())  # the run starts; nothing to send yet
+            await aio.sleep(0.05)
+            assert state["started"]
+            waiting.cancel()                  # what Starlette does when the client goes away
+            try:
+                await waiting
+            except aio.CancelledError:
+                pass
+            await aio.sleep(0.05)
+            # Checked here: asyncio.run() would cancel any leftover task on exit anyway.
+            assert state["cancelled"]
+
+        aio.run(go())

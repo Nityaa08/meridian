@@ -32,7 +32,8 @@ from app.config import settings
 from app.embedders import load_embedder
 from app.errors import describe_pipeline_error, log_failure
 from app.limits import RateLimiter, client_ip  # noqa: F401  (RateLimiter re-exported for tests)
-from app.pipeline.orchestrator import STATUS_COMPLETED, STATUS_DEGRADED, collect_warnings
+from app.pipeline.orchestrator import (STATUS_COMPLETED, STATUS_DEGRADED, _deadline_s, _timeout_message,
+                                      collect_warnings)
 
 _STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -47,6 +48,10 @@ def dedupe(passages: list[dict]) -> list[dict]:
             seen.add(url)
         out.append(p)
     return out
+
+
+class DeadlineExceeded(Exception):
+    """The whole demo run passed SESSION_TIMEOUT_S."""
 
 
 async def research(query: str, embedder, queue: asyncio.Queue) -> dict:
@@ -138,28 +143,53 @@ def register_demo_routes(app: FastAPI) -> None:
 
         queue: asyncio.Queue = asyncio.Queue()
 
+        async def run_with_deadline() -> dict:
+            # The same SESSION_TIMEOUT_S deadline as the full service. Only the deadline
+            # itself is reported as one; an agent's own TimeoutError is an ordinary failure.
+            limit = _deadline_s()
+            if limit is None:
+                return await research(query, embedder(), queue)
+            try:
+                async with asyncio.timeout(limit) as deadline:
+                    return await research(query, embedder(), queue)
+            except TimeoutError:
+                if deadline.expired():
+                    raise DeadlineExceeded() from None
+                raise
+
         async def stream():
             yield _sse({"agent": "Orchestrator", "type": "START", "message": f"Researching: {query}",
                         "data": {"simulated_llm": settings.simulate_llm, "note": SIMULATED_NOTE
                                  if settings.simulate_llm else "", "embedder": settings.embedder_backend}})
-            task = asyncio.create_task(research(query, embedder(), queue))
-            while True:
-                getter = asyncio.ensure_future(queue.get())
-                done, _ = await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
-                if getter in done:
-                    yield _sse(asdict(getter.result()))
-                    continue
-                getter.cancel()
-                while not queue.empty():
-                    yield _sse(asdict(queue.get_nowait()))
-                break
+            task = asyncio.create_task(run_with_deadline())
+            getter = None
             try:
-                result = task.result()
-                yield _sse({"agent": "Orchestrator", "type": "REPORT", "message": "Research complete",
-                            "data": result})
-            except Exception as e:  # report the failure in-band; headers are already sent
-                log_failure("Demo research run", e)
-                yield _sse(asdict(AgentEvent(agent="Orchestrator", type="ERROR", message=describe_pipeline_error(e))))
+                while True:
+                    getter = asyncio.ensure_future(queue.get())
+                    done, _ = await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
+                    if getter in done:
+                        yield _sse(asdict(getter.result()))
+                        continue
+                    getter.cancel()
+                    while not queue.empty():
+                        yield _sse(asdict(queue.get_nowait()))
+                    break
+                try:
+                    result = task.result()
+                    yield _sse({"agent": "Orchestrator", "type": "REPORT", "message": "Research complete",
+                                "data": result})
+                except DeadlineExceeded:
+                    yield _sse(asdict(AgentEvent(agent="Orchestrator", type="ERROR", message=_timeout_message())))
+                except Exception as e:  # report the failure in-band; headers are already sent
+                    log_failure("Demo research run", e)
+                    yield _sse(asdict(AgentEvent(agent="Orchestrator", type="ERROR",
+                                                 message=describe_pipeline_error(e))))
+            finally:
+                # The visitor closed the tab (or the stream ended): stop the run, so an
+                # abandoned question does not keep spending searches and LLM calls.
+                if getter is not None:
+                    getter.cancel()
+                task.cancel()
 
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
