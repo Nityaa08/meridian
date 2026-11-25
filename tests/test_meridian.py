@@ -555,3 +555,64 @@ def test_a_failed_llm_call_is_reported_by_kind_in_events_and_warnings(monkeypatc
     shown = " ".join(e.message + str(e.data) for e in events) + critic.error
     assert "API key was refused" in critic.error
     assert "Unauthorized" not in shown and "http" not in shown.replace("HTTP 401", "")
+
+
+def _replying(content: str):
+    """An httpx.AsyncClient stand-in whose chat completion returns `content`."""
+    import httpx
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, **k):
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]},
+                                  request=httpx.Request("POST", url))
+    return Client
+
+
+_PASSAGES = [{"title": "Retrieval", "text": "RAG retrieves passages before generating.",
+              "url": "https://e.org/rag", "source": "wikipedia", "similarity": 0.8}]
+
+
+@pytest.mark.parametrize("reply", [
+    '{"contradictions": null, "gaps": null, "unreliable_sources": null, "overall_quality": null}',
+    '{"contradictions": "none", "gaps": "coverage of costs", "overall_quality": 3}',
+    '{}',
+])
+def test_critic_survives_null_or_odd_fields(monkeypatch, reply):
+    # Before 2026-11-25 `"contradictions": null` reached len() and the whole run failed.
+    import asyncio
+    from app.agents.critic import CriticAgent
+    monkeypatch.setattr("app.agents.critic.settings.demo_mode", False)
+    monkeypatch.setattr("app.agents.critic.httpx.AsyncClient", _replying(reply))
+    critic, queue = CriticAgent(), asyncio.Queue()
+    out = asyncio.run(critic.run("q", _PASSAGES, queue))
+    assert isinstance(out["contradictions"], list) and isinstance(out["gaps"], list)
+    assert isinstance(out["overall_quality"], str)
+    assert critic.error is None
+
+
+def test_critic_falls_back_when_the_reply_is_not_an_object(monkeypatch):
+    import asyncio
+    from app.agents.critic import CriticAgent
+    monkeypatch.setattr("app.agents.critic.settings.demo_mode", False)
+    monkeypatch.setattr("app.agents.critic.httpx.AsyncClient", _replying('["a", "list"]'))
+    critic, queue = CriticAgent(), asyncio.Queue()
+    out = asyncio.run(critic.run("q", _PASSAGES, queue))
+    assert out["gaps"] == ["Unable to perform full critique"]
+    assert critic.error == "the provider's response had an unexpected shape"
+
+
+def test_synthesizer_survives_null_fields(monkeypatch):
+    import asyncio
+    from app.agents.synthesizer import SynthesizerAgent
+    monkeypatch.setattr("app.agents.synthesizer.settings.demo_mode", False)
+    monkeypatch.setattr("app.agents.synthesizer.httpx.AsyncClient",
+                        _replying('{"summary": null, "key_findings": null, "sections": null}'))
+    synth, queue = SynthesizerAgent(), asyncio.Queue()
+    critique = {"contradictions": None, "gaps": None}
+    report = asyncio.run(synth.run("q", _PASSAGES, critique, queue))
+    assert report["key_findings"] == [] and report["sections"] == [] and report["summary"] == ""
+    assert report["gaps_identified"] == [] and report["contradictions"] == []
+    assert synth.error is None

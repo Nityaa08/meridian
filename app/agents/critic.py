@@ -1,7 +1,6 @@
 import asyncio
-import json
 import httpx
-from app.agents.base import BaseAgent
+from app.agents.base import BaseAgent, json_object, list_field
 from app.config import settings
 from app.errors import describe_llm_error, log_failure
 from app.agents import simulated
@@ -53,7 +52,13 @@ class CriticAgent(BaseAgent):
                     )
                     resp.raise_for_status()
                     content = resp.json()["choices"][0]["message"]["content"]
-                    critique = json.loads(content)
+                    raw = json_object(content)
+                    critique = {
+                        "contradictions": list_field(raw, "contradictions"),
+                        "gaps": list_field(raw, "gaps", strings=True),
+                        "unreliable_sources": list_field(raw, "unreliable_sources"),
+                        "overall_quality": raw.get("overall_quality") if isinstance(raw.get("overall_quality"), str) else "unknown",
+                    }
             except Exception as e:
                 log_failure("Critic LLM call", e)
                 self.error = describe_llm_error(e)

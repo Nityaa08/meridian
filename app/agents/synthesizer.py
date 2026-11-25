@@ -2,7 +2,7 @@ import asyncio
 import json
 import numpy as np
 import httpx
-from app.agents.base import BaseAgent
+from app.agents.base import BaseAgent, json_object, list_field
 from app.config import settings
 from app.errors import describe_llm_error, log_failure
 from app.agents import simulated
@@ -51,8 +51,8 @@ class SynthesizerAgent(BaseAgent):
             for p in passages[:10]
         ]
 
-        gaps = critique.get("gaps", [])
-        contradictions = critique.get("contradictions", [])
+        gaps = critique.get("gaps") or []
+        contradictions = critique.get("contradictions") or []
 
         followup_note = f"\n\nFollow-up question to address: {followup_context}" if followup_context else ""
 
@@ -93,7 +93,12 @@ class SynthesizerAgent(BaseAgent):
                     )
                     resp.raise_for_status()
                     content = resp.json()["choices"][0]["message"]["content"]
-                    synthesis = json.loads(content)
+                    raw = json_object(content)
+                    synthesis = {
+                        "summary": raw.get("summary") if isinstance(raw.get("summary"), str) else "",
+                        "key_findings": list_field(raw, "key_findings", strings=True),
+                        "sections": list_field(raw, "sections"),
+                    }
             except Exception as e:
                 log_failure("Synthesizer LLM call", e)
                 self.error = describe_llm_error(e)
