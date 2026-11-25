@@ -104,7 +104,7 @@ The public demo runs on Vercel's free tier with `DEMO_MODE=true` (see `app/demo_
 | Ranking | `all-MiniLM-L6-v2` embeddings (PyTorch) | Hashed bag-of-words embedder: lexical overlap, not meaning. PyTorch (about 5.6 GB) does not fit Vercel's 500 MB function limit |
 | Planner, critic, writer | Groq LLM | **Simulated** when no `GROQ_API_KEY` is set: template sub-questions, a critique that only counts sources, and a report that quotes the top passages. The page and every report say so. Real when a key is set |
 | API | Sessions in SQLite, background tasks, follow-ups, `/sessions` | One stateless call, `GET /api/research?q=...`, that streams every stage and ends with a `REPORT` event. No database and no session list, so visitors cannot see each other's questions |
-| Guards | none (local use) | 12 questions an hour per visitor (per instance), questions up to 200 characters |
+| Guards | Optional `API_KEY`, `MAX_QUERY_CHARS`, a per-IP hourly limit and the `SESSION_TIMEOUT_S` deadline (see Quick Start) | 12 questions an hour per visitor (per instance), questions up to 200 characters, the same deadline, and a run stops when the visitor leaves |
 
 **To make the LLM stages real on the demo** (free): create a Groq API key at [console.groq.com](https://console.groq.com) and add it in the Vercel project settings as `GROQ_API_KEY`, then redeploy. The key lives only in Vercel's encrypted environment variables. The page's editor's note then reads "Live edition" and the lab notebook stops marking stages as simulated.
 
@@ -127,7 +127,7 @@ uvicorn main:app --reload
 
 **Before exposing the full service beyond your own machine**, set `API_KEY` in `.env`. Starting research, follow-ups, deleting a session and `GET /sessions` then need `Authorization: Bearer <key>` (or `X-API-Key: <key>`), and get 401 without it. Reading one session (`GET /research/{id}`) and its stream need only the session ID, a random UUID that only the caller who started it receives, because a browser's `EventSource` cannot send headers. Questions and follow-ups are capped at `MAX_QUERY_CHARS` (default 1,000; longer ones get 400), and each client IP can start `RESEARCH_RATE_LIMIT_PER_HOUR` research runs or follow-ups an hour (default 30, `0` turns it off; more get 429 with `Retry-After`). Requests rejected for length or a missing key don't count toward the limit. A whole research run or follow-up has one deadline, `SESSION_TIMEOUT_S` (default 180 seconds, `0` turns it off): when it passes, the run ends with an ERROR event and a `failed` status that says so, and a follow-up keeps the earlier report.
 
-The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Limitations](#known-limitations-checked-2026-11-15). `requirements.txt` alone installs the core service without PyTorch; the app then falls back to the lexical hashing embedder and logs a warning.
+The first start downloads the `all-MiniLM-L6-v2` embedding model (about 90 MB). It runs on the CPU by default (`EMBEDDER_DEVICE=cpu`); see [Known Limitations](#known-limitations). `requirements.txt` alone installs the core service without PyTorch; the app then falls back to the lexical hashing embedder and logs a warning.
 
 Run the demo version locally, with no key and no PyTorch:
 
@@ -287,11 +287,13 @@ What it can and can't tell you:
 
 ---
 
-## Known Limitations (checked 2026-11-18)
+## Known Limitations
+
+Last checked 2026-11-25.
 
 Fixed on 2026-11-18, found on the live demo: the fact check listed source titles as unsupported sentences (14 of 17 where every real sentence was quoted); the critic said "No arXiv paper" when the top passages were arxiv.org pages found by web search; and web results showed several titles run together and snippets starting with a date ("May 28, 2025 · ..."). Each has a test built from the live output.
 
-- **arXiv returned nothing on the 2026-11-18 live run.** Every passage came from Wikipedia or web search, and searches took 12 to 16 s, close to the 15 s per-call timeout, so the arXiv API was probably slow or limiting requests from Vercel. Search failures used to be swallowed silently; they are now logged with the exception type, so the next run's Vercel logs will say which.
+
 Fixed on 2026-11-16: a research run had no overall time limit. Each HTTP call had its own timeout (15 s to 45 s), but a run makes many of them, so a slow one could take minutes with the session stuck on `running`. Each run and follow-up now has one deadline, `SESSION_TIMEOUT_S` (default 180 s). The searches or LLM call still in flight are cancelled, the session ends `failed` with an error naming the limit, and a timed-out follow-up goes back to its earlier report and status. A `TimeoutError` raised inside an agent is still reported as itself, not as the deadline.
 
 Fixed on 2026-11-15: the full service had no authentication, no length limit on the question and no rate limit, so anyone who could reach it could read every caller's questions at `/sessions` and start unlimited research runs. It now has an optional API key, a question length cap and a per-IP hourly limit on research runs (see [Quick Start](#quick-start)), with tests.
@@ -300,10 +302,11 @@ Fixed on 2026-11-14: a live stream shared by two clients (or a reconnecting Even
 
 Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU by default and embeds the query and passages in one call), the Wikipedia 404, the DuckDuckGo `Invalid impersonate` error, the retired default model, silent fallbacks, unchecked citations, the event log, and stale event queues. See the tests below for what was checked and how.
 
-- **Not re-run against the live services.** The environment used for these fixes could not reach Groq, Wikipedia, DuckDuckGo, arXiv or Hugging Face. The fixes are covered by tests with fake services, and the new Wikipedia request follows the [MediaWiki Action API](https://www.mediawiki.org/wiki/API:Search) (`action=query&generator=search&prop=extracts`), but a real end-to-end run is still to do. The macOS fix follows the CPU workaround that passed 4 of 4 runs on 2026-10-28; it was not re-tested on a Mac.
+- **The full service has not been run against a real LLM since the 2026-11-02 fixes.** The machine used for these changes cannot reach Groq, so the LLM paths are covered by tests with fake services. The live demo (real Wikipedia and web search, simulated LLM stages) was run on Vercel on 2026-11-18 and 2026-11-21. The macOS fix follows the CPU workaround that passed 4 of 4 runs on 2026-10-28; it was not re-tested on a Mac.
+- **arXiv returned nothing on the 2026-11-18 live run.** Every passage came from Wikipedia or web search, and searches took 12 to 16 s, close to the 15 s per-call timeout, so the arXiv API was probably slow or limiting requests from Vercel. Search failures used to be swallowed silently; they are now logged with the exception type, so the next run's Vercel logs will say which.
 - **Model choice.** `GROQ_MODEL` defaults to `openai/gpt-oss-20b`, the replacement Groq lists for `llama-3.1-8b-instant` on its [deprecations page](https://console.groq.com/docs/deprecations) and a production model on its [models page](https://console.groq.com/docs/models) (both checked 2026-11-02). It is a reasoning model, so the Synthesizer's `max_tokens` was raised to 4096. Groq retires models often; if `/research` ends `degraded` with a 404 from Groq, pick a current model from that page.
 - **DuckDuckGo is a scraper.** `ddgs` can be rate-limited or break when the site changes; failures return no passages.
-- **Citations are checked against URLs only.** The Synthesizer can only cite retrieved URLs now, but whether a cited passage supports the sentence is not checked.
+- **The grounding check is lexical.** Citations must be retrieved URLs, and each sentence is checked for its content words in the passages it cites (see [Grounding check](#grounding-check)). A faithful paraphrase can be listed as unsupported, and a wrong claim that reuses a passage's words can pass; it is a check on copying and invention, not on meaning.
 - **A finished session's stream is a replay.** Once a session ends, `GET /research/{id}/stream` returns the saved events at once. The live queue of a session nobody streams is dropped 5 minutes after it finishes.
 - **Streaming works across worker processes, with a short delay.** A running session's events are saved to the database as they happen (batched, at most every 0.5 s). If a stream request lands on a worker that isn't running the session, it follows those saved events instead of returning 404. On the worker that runs the session, events arrive instantly; on another worker they arrive up to about half a second later. With several workers on different machines, use a shared database instead of SQLite.
 - **The full service is not deployable on Vercel serverless.** `sentence-transformers` pulls in PyTorch, so the install bundle is about 5.6 GB, above Vercel's 500 MB function limit. The live demo therefore runs the stateless demo app with the lexical hashing embedder (see [The Live Demo](#the-live-demo)); run the full service locally or in a container on a VM.
@@ -311,7 +314,7 @@ Fixed on 2026-11-02: the Apple Silicon crash (the embedder now runs on the CPU b
 - **Access control is one optional shared key.** With `API_KEY` unset (the default, for local development) the full service is open. There are no per-user accounts: anyone with the key sees every session in `/sessions`, and anyone with a session ID can read that report and its stream. The research limit is counted per IP in each worker process's memory, so with several workers a client gets the limit once per worker, and behind a reverse proxy every client shares the proxy's IP (the `X-Real-IP` header is only trusted on Vercel).
 - **Background work dies with the process.** Sessions run as FastAPI background tasks, not in a job queue. If the server restarts mid-run the session stays `running` in the database and is never resumed; a stream following it from another worker gives up after 30 minutes.
 - **A follow-up replaces the session's report and event log.** Only the latest answer is kept; there is no history of earlier follow-ups.
-- **No cancel endpoint, and the demo has no overall deadline.** A run stops at `SESSION_TIMEOUT_S`, but a caller cannot stop it sooner. An embedding call already running in its worker thread finishes in the background after the deadline (the result is discarded). The stateless demo endpoint (`/api/research`) relies on each call's own timeout and the demo's shorter question limit.
+- **No cancel endpoint.** A run stops at `SESSION_TIMEOUT_S`, but a caller of the full service cannot stop it sooner. An embedding call already running in its worker thread finishes in the background after the deadline (the result is discarded). The stateless demo endpoint (`/api/research`) has the same deadline and, since 2026-11-25, stops its run when the visitor closes the stream.
 
 ## Tests
 
